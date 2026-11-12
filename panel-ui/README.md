@@ -65,6 +65,22 @@ PANEL_UI_EXTENSIONS=/abs/path/to/agent-module-prodoc/panel-ui npm test
 删掉 `index.js` 末尾的 `//# sourceMappingURL=` 行（否则 vitest 会抱怨找不到 .map），
 再跑一遍 `npm run build` 与 `npm test`。
 
+## 它是**主区视图**，不是浮层（2026-11 起）
+
+顶栏的「文档」与「聊天 / 设置 / Shell」同级，切换后独占主区。早先它是入口行的
+一个浮层按钮 + overlay，实测不够用：
+
+- 文档画布要独占主区（可平移缩放的画布塞在浮层里，边框与 padding 全是浪费）；
+- "我在看哪个文档"属于"我在做什么"，该被顶栏选中态与 `view` 偏好记住；
+- 移动端它该和聊天/设置并列，而不是埋在一个按钮后面。
+
+Panel 侧为此加了通用扩展点 `PanelMainView`（见 `Extensions/registry` 的
+`PanelMainView` 文档）：任何扩展都能注册主区视图，宿主负责顶栏按钮、移动端菜单、
+持久化与门控。扩展这边只有一处：`mainViews` 里声明 `id / label / icon / component / when`。
+
+视图组件拿到三个 prop：`teamId` / `sessionId` / `core`。**布局责任在视图自己**——
+宿主只给一个零 padding 的 flex 容器，滚动与间距都归视图。
+
 ## 目录选择
 
 两段分开摆（`已配置的文档根` / `浏览目录`）：进一个已知位置、与找一个新位置是

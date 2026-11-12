@@ -1,7 +1,16 @@
 <script setup lang="ts">
-//! ProDoc 文档群面板（overlay）。
+//! ProDoc 文档群面板（**主区视图**，2026-11 起不再是浮层）。
 //!
 //! 两态：**选目录**（还没有文档根）与**看画布**（已打开）。
+//!
+//! ## 为什么是视图而不是浮层
+//!
+//! 浮层（`overlays`）适合"看一眼就关"的列表与表单。文档画布不是：它需要独占
+//! 主区（可平移缩放的画布，边框和 padding 全是浪费）、"我在看哪个文档"该被
+//! 顶栏选中态记住、移动端该和聊天/设置并列。这些是**视图**的特征。
+//!
+//! 布局责任也随之转移：浮层时代尺寸由 `SessionOverlay` 的 inset 算，现在宿主
+//! 只给一个零 padding 的 flex 容器，滚动与间距全归本组件。
 //!
 //! ## 编辑：冲突合并交前端
 //!
@@ -27,7 +36,6 @@
 
 import { computed, onMounted, ref, watch } from 'vue';
 import NeumorphismButton from '@echolab-auto/ui-frame/components/NeumorphismButton';
-import { state } from '@echo-agent/panel';
 import PanelIcon from '@echo-agent/panel/components/PanelIcon';
 import { DocGraphViewer } from '../vendor/prodoc-renderer/index.js';
 import '../vendor/prodoc-renderer/index.css';
@@ -35,9 +43,18 @@ import { activeEntry, activeReport, activeRoot, browse, check, openRoot, prodoc,
 import { breadcrumbs, describeBundle, parentPath } from '../prodoc';
 import { deleteFile, saveFile } from '../write';
 
-const props = defineProps<{ teamId: string | null; sessionId?: string }>();
+const props = defineProps<{
+  teamId: string | null;
+  sessionId?: string;
+  /**
+   * 当前 Core。由宿主传入而不是本组件读 `state.activeRegion`：
+   * 视图在多上游聚合下要按"这一屏属于哪个 Core"取数据，宿主已经有一份
+   * 确定的值，组件自己再读一次会多一个可能不同步的来源。
+   */
+  core?: string | null;
+}>();
 
-const core = computed(() => state.activeRegion ?? null);
+const core = computed(() => props.core ?? null);
 const entry = computed(() => activeEntry(props.teamId, core.value));
 const roots = computed(() => prodoc.roots);
 const browseRoots = computed(() => (prodoc.browseRoots.length > 0 ? prodoc.browseRoots : prodoc.roots));
@@ -285,8 +302,11 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  height: 100%;
+  /* 主区视图：宿主容器已是 flex column + overflow hidden，这里只声明
+     "占满并让内部滚动"，不重复设 100%（父级高度由 `.extension-view` 定）。 */
+  flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   padding: 12px;
   box-sizing: border-box;
 }

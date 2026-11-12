@@ -295,14 +295,19 @@ function applyDirs(dirs: ProDocDirsEvent): void {
 registerPanelExtension(definePanelExtension({
   id: 'echo-agent.prodoc',
   hooks: { setup },
-  entries: [{
+  // **主区视图**，不是浮层（2026-11 用户反馈：浮层里看文档不够好用）。
+  //
+  // 三条理由都写进了 Panel 的 `PanelMainView` 文档：文档画布需要独占主区
+  // （可平移缩放的画布塞在浮层里，边框与 padding 全是浪费）；"我在看哪个
+  // 文档"属于"我在做什么"，该被顶栏选中态与 `view` 偏好记住；移动端它该和
+  // 聊天/设置并列，而不是埋在一个按钮后面。
+  mainViews: [{
     id: 'docs',
     label: '文档',
-    title: 'ProDoc 文档群',
+    hint: 'ProDoc 文档群：文档图画布 / 编辑 / 检查',
     // `file-text` 是同义里最贴的（`folder` 已被工作区用掉）。
     icon: 'file-text',
+    component: ProDocPanel,
     when: ({ teamId }) => available(teamId),
-    prefetch: ({ core }) => requestRoots(core ?? null),
   }],
-  overlays: [{ id: 'docs', label: 'ProDoc 文档群', component: ProDocPanel }],
 }));
