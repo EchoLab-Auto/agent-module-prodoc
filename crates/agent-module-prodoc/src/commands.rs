@@ -338,13 +338,80 @@ fn roots(state: &ModuleState) -> Result<Value, String> {
 
 /// 生效的根列表（面板渲染用）。
 fn root_entries(config: &crate::Config) -> Vec<RootEntry> {
-    allowed_roots(config)
+    let roots = allowed_roots(config);
+    let labels = disambiguated_labels(&roots);
+    roots
         .into_iter()
-        .map(|root| RootEntry {
-            label: label_of(&root),
+        .zip(labels)
+        .map(|(root, label)| RootEntry {
+            label,
+            hint: home_relative(&root),
             path: root.to_string_lossy().into_owned(),
         })
         .collect()
+}
+
+/// 给每个根算一个**彼此不重名**的显示名。
+///
+/// 从最后一段开始，只要有重名就把所有候选一起往上加一层，直到全不相同或
+/// 已经吃到根（`/`）。为什么是"一起加"而不是"只把撞的那个加长"：
+/// 后者会让 `document` 与 `DocRenderer/document` 并排出现，两条信息长度差
+/// 一倍，扫读时反而更乱。
+fn disambiguated_labels(roots: &[PathBuf]) -> Vec<String> {
+    if roots.is_empty() {
+        return Vec::new();
+    }
+    let max_depth = roots
+        .iter()
+        .map(|root| {
+            root.components()
+                .filter(|c| matches!(c, std::path::Component::Normal(_)))
+                .count()
+        })
+        .max()
+        .unwrap_or(1)
+        .max(1);
+
+    let mut depth = 1;
+    loop {
+        let labels: Vec<String> = roots.iter().map(|root| tail_segments(root, depth)).collect();
+        let unique = labels.iter().collect::<std::collections::HashSet<_>>().len() == labels.len();
+        // 到最深层还撞（两个根字面相同）就没得再区分了，接受重复。
+        if unique || depth >= max_depth {
+            return labels;
+        }
+        depth += 1;
+    }
+}
+
+/// 路径末 `depth` 段用 `/` 连接（`depth` 超过段数时给全路径）。
+fn tail_segments(path: &Path, depth: usize) -> String {
+    let segments: Vec<String> = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    let take = depth.min(segments.len()).max(1);
+    segments[segments.len() - take..].join("/")
+}
+
+/// 家目录缩写成 `~`（只在真落在 HOME 下时改，避免把别的绝对路径写歪）。
+fn home_relative(path: &Path) -> String {
+    let full = path.to_string_lossy().into_owned();
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return full;
+    };
+    let home_text = home.to_string_lossy().into_owned();
+    if home_text.is_empty() || home_text == "/" {
+        return full;
+    }
+    match path.strip_prefix(&home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Ok(rest) => format!("~/{}", rest.to_string_lossy()),
+        Err(_) => full,
+    }
 }
 
 /// 生效的根列表：配置优先，空则回退 HOME。
@@ -430,13 +497,6 @@ fn list_child_dirs(path: &Path) -> Result<Vec<DirEntry>, String> {
             is_dir: true,
         })
         .collect())
-}
-
-/// 显示名：路径最后一段（根目录回退到全路径）。
-fn label_of(path: &Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -802,6 +862,82 @@ mod tests {
         assert_eq!(writes_of(&seen, crate::events::REPORT).len(), 0);
         assert_eq!(writes_of(&seen, crate::events::ERROR).len(), 1);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// 两个根同名时必须给出**彼此不同**的 label（本机真实情况：
+    /// DocRenderer 的 document/ 与 Core 仓的 document/）。
+    #[test]
+    fn duplicate_tail_segments_are_disambiguated() {
+        let roots = vec![
+            PathBuf::from("/home/me/code/echo-tech/DocRenderer/document"),
+            PathBuf::from("/home/me/.local/share/echo-agent-core/source/document"),
+        ];
+        let labels = disambiguated_labels(&roots);
+        assert_eq!(labels.len(), 2);
+        assert_ne!(labels[0], labels[1], "两个根不能给同一个名字: {labels:?}");
+        // 最短能区分的后缀：一层不够就往上加一层。
+        assert_eq!(labels[0], "DocRenderer/document");
+        assert_eq!(labels[1], "source/document");
+    }
+
+    /// 唯一时不啰嗦：一个根只给末段，不要给整条路径。
+    #[test]
+    fn unique_tail_segment_stays_short() {
+        let roots = vec![PathBuf::from("/srv/wiki")];
+        assert_eq!(disambiguated_labels(&roots), vec!["wiki".to_string()]);
+    }
+
+    /// 三层才分开的情况也要处理（不能只往上加一层就放弃）。
+    #[test]
+    fn disambiguation_keeps_climbing_until_unique() {
+        let roots = vec![
+            PathBuf::from("/a/x/docs"),
+            PathBuf::from("/b/x/docs"),
+        ];
+        let labels = disambiguated_labels(&roots);
+        assert_ne!(labels[0], labels[1], "{labels:?}");
+        assert_eq!(labels, vec!["a/x/docs".to_string(), "b/x/docs".to_string()]);
+    }
+
+    /// `hint` 用来确认路径：落在 HOME 下就缩写，否则原样给绝对路径。
+    #[test]
+    fn hint_uses_home_tilde() {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        if let Some(home) = home {
+            let inside = home.join("code/docs");
+            assert_eq!(home_relative(&inside), "~/code/docs");
+            assert_eq!(home_relative(&home), "~");
+        }
+        let outside = PathBuf::from("/srv/docs");
+        assert_eq!(home_relative(&outside), "/srv/docs");
+    }
+
+    /// 根列表事件里同时带 label 与 hint（面板两行显示靠它们）。
+    #[tokio::test]
+    async fn roots_event_carries_label_and_hint() {
+        let dir = temp_dir("roots-hint");
+        let root = dir.join("docs");
+        let state = state_with(&root);
+        let seen = collect_writes(&state);
+        handle(&state, "ProDocRoots", json!({}))
+            .await
+            .expect("claimed")
+            .expect("ok");
+        let payload = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(name, _)| name == crate::events::ROOTS)
+            .map(|(_, payload)| payload.clone())
+            .expect("应有 prodoc.roots 事件");
+        assert_eq!(payload["roots"][0]["label"], "docs");
+        assert!(
+            payload["roots"][0]["hint"].as_str().unwrap_or_default().starts_with('/')
+                || payload["roots"][0]["hint"].as_str().unwrap_or_default().starts_with('~'),
+            "hint 应该是 ~ 缩写或绝对路径: {:?}",
+            payload["roots"][0]["hint"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 根列表命令：事件里带生效上限（面板要显示"最多 2000 篇"这类说明）。

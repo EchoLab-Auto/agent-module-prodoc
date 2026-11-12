@@ -46,9 +46,23 @@ export interface ProDocErrorEvent {
   error: string;
 }
 
+/**
+ * 一个可打开的文档根。
+ *
+ * `label` 由模块保证**彼此不重名**（末段不够就往上加一层）——这条很重要：
+ * 两个根都叫 `document` 时，只显示末段的话面板里是两个一模一样的按钮。
+ * `hint` 是 `~` 缩写的完整路径，用来在按钮第二行做最后确认。
+ */
+export interface ProDocRoot {
+  label: string;
+  path: string;
+  /** `~` 缩写的路径（旧版模块没有这个字段，回落为空串）。 */
+  hint?: string;
+}
+
 /** 可打开的根（`prodoc.roots`）。 */
 export interface ProDocRootsEvent {
-  roots: Array<{ label: string; path: string }>;
+  roots: ProDocRoot[];
   caps?: {
     max_files?: number;
     max_file_bytes?: number;
@@ -282,8 +296,17 @@ function normalizeError(payload: Record<string, unknown>, core: string): ProDocE
 }
 
 function normalizeRoots(payload: Record<string, unknown>): ProDocRootsEvent {
+  const roots = Array.isArray(payload.roots)
+    ? (payload.roots as ProDocRoot[])
+        .filter((root) => root && typeof root.path === 'string')
+        .map((root) => ({
+          label: typeof root.label === 'string' && root.label ? root.label : root.path,
+          path: root.path,
+          hint: typeof root.hint === 'string' ? root.hint : '',
+        }))
+    : [];
   return {
-    roots: Array.isArray(payload.roots) ? (payload.roots as ProDocRootsEvent['roots']) : [],
+    roots,
     caps: (payload.caps as ProDocRootsEvent['caps']) ?? undefined,
   };
 }
@@ -332,7 +355,7 @@ export function formatBytes(bytes: number): string {
  * 只用于显示与"上一级"跳转——真正的越权判定在 Core（`check_allowed`），
  * 前端不做安全判断，只做导航。
  */
-export function breadcrumbs(path: string | null, roots: Array<{ label: string; path: string }>): Array<{ label: string; path: string }> {
+export function breadcrumbs(path: string | null, roots: ProDocRoot[]): Array<{ label: string; path: string }> {
   if (!path) return [];
   const root = roots.find((item) => path === item.path || path.startsWith(`${item.path}/`));
   const base = root ? root.path : '';
@@ -349,7 +372,7 @@ export function breadcrumbs(path: string | null, roots: Array<{ label: string; p
 }
 
 /** 上一级路径（已在根时返回 null = 回到根列表）。 */
-export function parentPath(path: string | null, roots: Array<{ label: string; path: string }>): string | null {
+export function parentPath(path: string | null, roots: ProDocRoot[]): string | null {
   if (!path) return null;
   const root = roots.find((item) => path === item.path || path.startsWith(`${item.path}/`));
   if (root && path === root.path) return null;

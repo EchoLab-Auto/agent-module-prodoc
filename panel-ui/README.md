@@ -65,6 +65,17 @@ PANEL_UI_EXTENSIONS=/abs/path/to/agent-module-prodoc/panel-ui npm test
 删掉 `index.js` 末尾的 `//# sourceMappingURL=` 行（否则 vitest 会抱怨找不到 .map），
 再跑一遍 `npm run build` 与 `npm test`。
 
+## 目录选择
+
+两段分开摆（`已配置的文档根` / `浏览目录`）：进一个已知位置、与找一个新位置是
+两个不同的问题，混在一屏里会让人不知道哪些按钮是干什么的。
+
+根按钮是**两行**——主行是模块算出的不重名短名（`DocRenderer/document`），副行是
+`~` 缩写的完整路径。两个根都叫 `document` 时只显示末段就分不清了。
+
+上次打开的根记在 `localStorage`（按 `core|team` 分键，只记路径不记内容）。恢复时
+会先核对它是否仍在 `roots` 里——配置删掉那个目录后不会再往一个非法根上冲。
+
 ## 检查
 
 工具栏的「检查」按钮发 `ProDocCheck`，报告走模块事件 `prodoc.report`，按错误 /

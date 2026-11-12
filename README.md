@@ -84,6 +84,22 @@ CLI 是一次性页面加载，超量顶多慢；本模块走 WS 推送，一个
 已知有意的差异：`broken-link` 的 `file` 字段填**声明方**（CLI 留空，它拿目标名反查
 不到）——排查时更想知道"谁写错了"。
 
+## 根列表的显示名
+
+配置里两个根可能同名——本机就真实存在：DocRenderer 的 `document/` 与 Core 仓自己的
+`document/`。只显示末段的话面板里是两个一模一样的按钮。
+
+所以 `RootEntry.label` 取**能区分的最短后缀**：从末段开始，只要有重名就把所有候选
+一起往上加一层，直到全不相同。例如：
+
+    /home/me/code/echo-tech/DocRenderer/document  →  DocRenderer/document
+    /home/me/.local/share/…/source/document       →  source/document
+
+「一起加」而不是「只把撞的那个加长」：后者会让两个按钮的长度差一倍，扫读时更乱。
+
+`RootEntry.hint` 是 `~` 缩写的完整路径，用于第二行确认。UI 侧是两行按钮 + 顶栏
+label 主、hint 次。
+
 ## Panel UI 扩展
 
 `panel-ui/`：入口「文档」+ 一个 overlay。渲染器 vendored 在

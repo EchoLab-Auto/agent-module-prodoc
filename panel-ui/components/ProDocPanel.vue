@@ -15,11 +15,15 @@
 //! 同步 dist 就丢）。缺了它不影响保存/合并，"采用我的版本"仍按 `disk=undefined`
 //! 走强制覆盖。
 //!
-//! ## 目录选择用两级
+//! ## 目录选择：两种入口，**分开**摆
 //!
-//! 上面一行是配置好的根（一键进入），下面是逐层浏览（进子目录）。两级都要：
-//! 只给根，遇到"文档在根下面三层"就得改 modules.toml；只给浏览器，每次都要
-//! 从家目录一路点进去。
+//! 「已配置的根」与「浏览目录」是两个不同的问题（进已知的位置 / 找一个
+//! 新位置），混在一屏里会让人不知道刚才那些按钮是干什么的。所以分成两段，
+//! 各带一句说明。
+//!
+//! 根按钮是**两行**：`label` 是模块算出的不重名短名（`DocRenderer/document`），
+//! `hint` 是 `~` 缩写的完整路径。本机就真实存在两个都叫 `document` 的根，
+//! 只显示末段时它们一模一样。
 
 import { computed, onMounted, ref, watch } from 'vue';
 import NeumorphismButton from '@echolab-auto/ui-frame/components/NeumorphismButton';
@@ -27,7 +31,7 @@ import { state } from '@echo-agent/panel';
 import PanelIcon from '@echo-agent/panel/components/PanelIcon';
 import { DocGraphViewer } from '../vendor/prodoc-renderer/index.js';
 import '../vendor/prodoc-renderer/index.css';
-import { activeEntry, activeReport, browse, check, openRoot, prodoc, refresh, requestRoots } from '../index';
+import { activeEntry, activeReport, activeRoot, browse, check, openRoot, prodoc, refresh, requestRoots } from '../index';
 import { breadcrumbs, describeBundle, parentPath } from '../prodoc';
 import { deleteFile, saveFile } from '../write';
 
@@ -39,6 +43,8 @@ const roots = computed(() => prodoc.roots);
 const browseRoots = computed(() => (prodoc.browseRoots.length > 0 ? prodoc.browseRoots : prodoc.roots));
 const crumbs = computed(() => breadcrumbs(prodoc.browsePath, browseRoots.value));
 const summary = computed(() => (entry.value ? describeBundle(entry.value) : ''));
+/** 当前根的显示信息（label 优先——绝对路径太长，扫读时认不出是哪个）。 */
+const currentRoot = computed(() => activeRoot(core.value));
 const report = computed(() => activeReport(props.teamId, core.value));
 /** 检查面板是否展开（有错误时默认展开——那是用户最想看的）。 */
 const reportOpen = ref(false);
@@ -110,7 +116,12 @@ onMounted(() => {
       <header class="prodoc-bar">
         <div class="prodoc-bar-main">
           <PanelIcon name="file-text" size="md" />
-          <strong class="prodoc-root">{{ prodoc.root }}</strong>
+          <span class="prodoc-root-wrap" :title="currentRoot?.hint || prodoc.root">
+            <strong class="prodoc-root">{{ currentRoot?.label ?? prodoc.root }}</strong>
+            <span v-if="currentRoot?.hint && currentRoot.hint !== currentRoot.label" class="prodoc-root-hint">
+              {{ currentRoot.hint }}
+            </span>
+          </span>
           <span class="prodoc-summary">{{ summary }}</span>
         </div>
         <div class="prodoc-bar-actions">
@@ -191,62 +202,79 @@ onMounted(() => {
     <!-- ── 未打开：选目录 ─────────────────────────────────────── -->
     <template v-else>
       <section class="prodoc-picker">
-        <h3>选择一个文档根</h3>
-        <p class="prodoc-hint">
-          文档根必须在 Core 的模块配置 <code>roots</code> 内（未配置时只允许家目录）。
-          上限：{{ prodoc.caps.max_files || '—' }} 篇 /
-          单文件 {{ Math.round((prodoc.caps.max_file_bytes || 0) / 1024) || '—' }} KB。
-        </p>
-        <div class="prodoc-roots">
-          <NeumorphismButton
-            v-for="root in roots"
-            :key="root.path"
-            variant="glass"
-            shape="pill"
-            size="small"
-            :title="root.path"
-            @click="pick(root.path)"
-          >
-            {{ root.label }}
-          </NeumorphismButton>
-          <span v-if="roots.length === 0" class="prodoc-empty">没有可用的文档根</span>
+        <!-- ① 已配置的根：进一个已知位置 -->
+        <div class="prodoc-section">
+          <h3 class="prodoc-section-title">
+            已配置的文档根
+            <span class="prodoc-section-note">来自 Core 的 <code>roots</code> 配置</span>
+          </h3>
+          <ul class="prodoc-root-list">
+            <li v-for="root in roots" :key="root.path">
+              <button class="prodoc-root-item" :title="root.hint || root.path" @click="pick(root.path)">
+                <PanelIcon name="file-text" size="sm" />
+                <span class="prodoc-root-item-text">
+                  <span class="prodoc-root-item-label">{{ root.label }}</span>
+                  <span v-if="root.hint && root.hint !== root.label" class="prodoc-root-item-hint">
+                    {{ root.hint }}
+                  </span>
+                </span>
+              </button>
+            </li>
+          </ul>
+          <p v-if="roots.length === 0" class="prodoc-empty">
+            没有可用的文档根。在 <code>modules.toml</code> 的 <code>[module.config] roots</code>
+            里加一个目录（改完即时生效，无需重启）。
+          </p>
+          <p class="prodoc-hint">
+            上限：{{ prodoc.caps.max_files || '—' }} 篇 /
+            单文件 {{ Math.round((prodoc.caps.max_file_bytes || 0) / 1024) || '—' }} KB。
+          </p>
         </div>
 
-        <div class="prodoc-crumbs">
-          <button class="prodoc-crumb" @click="browse(core, null)">根列表</button>
-          <template v-for="crumb in crumbs" :key="crumb.path">
-            <span class="prodoc-sep">/</span>
-            <button class="prodoc-crumb" @click="enter(crumb.path)">{{ crumb.label }}</button>
-          </template>
-          <NeumorphismButton
-            v-if="prodoc.browsePath"
-            variant="glass"
-            shape="pill"
-            size="small"
-            @click="up"
-          >
-            上一级
-          </NeumorphismButton>
-          <NeumorphismButton
-            v-if="prodoc.browsePath"
-            variant="glass"
-            shape="pill"
-            size="small"
-            @click="pick(prodoc.browsePath as string)"
-          >
-            用这个目录
-          </NeumorphismButton>
-        </div>
+        <!-- ② 浏览目录：找一个新位置 -->
+        <div class="prodoc-section">
+          <h3 class="prodoc-section-title">
+            浏览目录
+            <span class="prodoc-section-note">只能进到已配置的根之内</span>
+          </h3>
+          <div class="prodoc-crumbs">
+            <button class="prodoc-crumb" @click="browse(core, null)">根列表</button>
+            <template v-for="crumb in crumbs" :key="crumb.path">
+              <span class="prodoc-sep">/</span>
+              <button class="prodoc-crumb" @click="enter(crumb.path)">{{ crumb.label }}</button>
+            </template>
+            <NeumorphismButton
+              v-if="prodoc.browsePath"
+              variant="glass"
+              shape="pill"
+              size="small"
+              @click="up"
+            >
+              上一级
+            </NeumorphismButton>
+            <NeumorphismButton
+              v-if="prodoc.browsePath"
+              variant="glass"
+              shape="pill"
+              size="small"
+              @click="pick(prodoc.browsePath as string)"
+            >
+              用这个目录
+            </NeumorphismButton>
+          </div>
 
-        <ul class="prodoc-dirs">
-          <li v-for="dir in prodoc.browseEntries" :key="dir.path">
-            <button class="prodoc-dir" @click="enter(dir.path)">
-              <PanelIcon name="folder" size="sm" />
-              <span>{{ dir.name }}</span>
-            </button>
-          </li>
-          <li v-if="prodoc.browseEntries.length === 0" class="prodoc-empty">这一层没有子目录</li>
-        </ul>
+          <ul class="prodoc-dirs">
+            <li v-for="dir in prodoc.browseEntries" :key="dir.path">
+              <button class="prodoc-dir" @click="enter(dir.path)">
+                <PanelIcon name="folder" size="sm" />
+                <span class="prodoc-dir-name">{{ dir.name }}</span>
+              </button>
+            </li>
+            <li v-if="prodoc.browseEntries.length === 0" class="prodoc-empty">
+              {{ prodoc.browsePath ? '这一层没有子目录' : '从上面的根选一个，或告诉我你想加哪个目录' }}
+            </li>
+          </ul>
+        </div>
       </section>
     </template>
   </div>
@@ -278,13 +306,25 @@ onMounted(() => {
   min-width: 0;
 }
 
+.prodoc-root-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
+}
+
 .prodoc-root {
+  font-size: 13px;
+}
+
+.prodoc-root-hint {
   font-family: var(--echo-font-mono, monospace);
-  font-size: 12px;
+  font-size: 11px;
+  opacity: 0.58;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 46ch;
+  max-width: 52ch;
 }
 
 .prodoc-summary {
@@ -410,10 +450,74 @@ onMounted(() => {
   line-height: 1.6;
 }
 
-.prodoc-roots {
+.prodoc-section {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prodoc-section-title {
+  display: flex;
+  align-items: baseline;
   gap: 8px;
-  flex-wrap: wrap;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.prodoc-section-note {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.58;
+}
+
+.prodoc-root-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.prodoc-root-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.prodoc-root-item:hover {
+  background: var(--echo-color-surface-raised, rgba(0, 0, 0, 0.05));
+}
+
+.prodoc-root-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.prodoc-root-item-label {
+  font-size: 13px;
+}
+
+.prodoc-root-item-hint {
+  font-family: var(--echo-font-mono, monospace);
+  font-size: 11px;
+  opacity: 0.58;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60ch;
 }
 
 .prodoc-crumbs {
@@ -464,6 +568,12 @@ onMounted(() => {
 
 .prodoc-dir:hover {
   background: var(--echo-color-surface-raised, rgba(0, 0, 0, 0.05));
+}
+
+.prodoc-dir-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .prodoc-empty {

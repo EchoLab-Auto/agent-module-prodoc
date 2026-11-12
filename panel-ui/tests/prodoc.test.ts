@@ -112,6 +112,47 @@ describe('collectProDocEvents', () => {
     expect(roots?.roots[0].label).toBe('new');
   });
 
+  it('根列表保留 hint（按钮第二行靠它区分同名根）', () => {
+    const { roots } = collectProDocEvents([
+      {
+        module: MODULE,
+        name: ROOTS_EVENT,
+        payload: {
+          roots: [
+            { label: 'DocRenderer/document', path: '/x/DocRenderer/document', hint: '~/x/DocRenderer/document' },
+            { label: 'source/document', path: '/x/source/document', hint: '~/x/source/document' },
+          ],
+        },
+      },
+    ]);
+    expect(roots?.roots.map((root) => root.label)).toEqual([
+      'DocRenderer/document',
+      'source/document',
+    ]);
+    expect(roots?.roots[0].hint).toBe('~/x/DocRenderer/document');
+  });
+
+  it('旧版模块没给 hint / label 时回落（不能让按钮变成空白）', () => {
+    const { roots } = collectProDocEvents([
+      {
+        module: MODULE,
+        name: ROOTS_EVENT,
+        payload: { roots: [{ path: '/only/path' }, { label: '', path: '/another' }] },
+      },
+    ]);
+    expect(roots?.roots[0].label).toBe('/only/path');
+    expect(roots?.roots[1].label).toBe('/another');
+    expect(roots?.roots[0].hint).toBe('');
+  });
+
+  it('根列表里缺 path 的条目被丢掉（无法定位，点不了）', () => {
+    const { roots } = collectProDocEvents([
+      { module: MODULE, name: ROOTS_EVENT, payload: { roots: [{ label: 'x' }, { label: 'ok', path: '/ok' }] } },
+    ]);
+    expect(roots?.roots).toHaveLength(1);
+    expect(roots?.roots[0].path).toBe('/ok');
+  });
+
   it('错误事件与快照分开收集（都按 root 去重）', () => {
     const events = [
       { module: MODULE, name: ERROR_EVENT, payload: { team_id: 't1', root: '/srv/docs', error: '不在允许范围' } },

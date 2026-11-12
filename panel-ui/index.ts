@@ -40,6 +40,7 @@ import {
   type ProDocBundleEvent,
   type ProDocDirsEvent,
   type ProDocReportEvent,
+  type ProDocRoot,
   bundleKeyOf,
   collectProDocEvents,
 } from './prodoc';
@@ -73,8 +74,8 @@ export const prodoc = reactive({
   root: null as string | null,
   /** `core|team|root` → 状态。 */
   entries: {} as Record<string, ProDocEntry>,
-  /** 可打开的根（来自 `prodoc.roots`）。 */
-  roots: [] as Array<{ label: string; path: string }>,
+  /** 可打开的根（来自 `prodoc.roots`；`label` 由模块保证不重名）。 */
+  roots: [] as ProDocRoot[],
   /** 生效上限（界面上说明"最多 2000 篇"这类）。 */
   caps: { max_files: 0, max_file_bytes: 0, max_total_bytes: 0 },
   /** 目录选择器的当前层（null = 根列表）。 */
@@ -82,12 +83,53 @@ export const prodoc = reactive({
   /** 目录选择器的条目。 */
   browseEntries: [] as Array<{ name: string; path: string; is_dir: boolean }>,
   /** 目录选择器里的根列表（浏览事件也带一份）。 */
-  browseRoots: [] as Array<{ label: string; path: string }>,
+  browseRoots: [] as ProDocRoot[],
   /** `core|team|root` → 最近一次检查报告。 */
   reports: {} as Record<string, ProDocReportEvent>,
   /** 已发检查命令、还没收到报告。 */
   checking: false,
 });
+
+/**
+ * 上次打开的文档根（按 `core|team` 分键）。
+ *
+ * 只存**路径**，不存内容：内容是磁盘的事实，缓存它会在磁盘改动后显示旧数据；
+ * 而"我上次在看哪个目录"是纯界面状态，重开面板回到原地才符合预期。
+ *
+ * 用 `localStorage` 而不是后端：这是每台设备 / 每个浏览器各自的偏好，跟着
+ * Core 走反而怪（换台机器打开不该跳到别人看过的目录）。
+ */
+const LAST_ROOT_KEY = 'prodoc.last-root';
+
+function lastRootMap(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(LAST_ROOT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {};
+  } catch {
+    // 隐私模式 / 存储被禁用：当作没有记忆，别让扩展崩掉。
+    return {};
+  }
+}
+
+function rememberRoot(teamId: string | null, core: string | null, root: string | null): void {
+  try {
+    const map = lastRootMap();
+    const key = bundleKeyOf({ team_id: teamId, core, root: root ?? '' }).split('|').slice(0, 2).join('|');
+    if (root) map[key] = root;
+    else delete map[key];
+    localStorage.setItem(LAST_ROOT_KEY, JSON.stringify(map));
+  } catch {
+    // 同上：写不进去不影响本次会话。
+  }
+}
+
+function recallRoot(teamId: string | null, core: string | null): string | null {
+  const map = lastRootMap();
+  const key = bundleKeyOf({ team_id: teamId, core, root: '' }).split('|').slice(0, 2).join('|');
+  return map[key] ?? null;
+}
 
 /** 门控：模块启用（team 没关它）。 */
 function available(teamId: string | null): boolean {
@@ -127,6 +169,7 @@ export function openRoot(teamId: string | null, core: string | null, root: strin
   const key = bundleKeyOf({ team_id: teamId, core, root });
   prodoc.entries[key] = { ...(prodoc.entries[key] ?? emptyEntry(core ?? '')), loading: true, error: null };
   prodoc.root = root;
+  rememberRoot(teamId, core, root);
   // 换根之后旧的"检查中"状态不属于新根——不复位的话「检查」按钮会一直显示
   // 忙碌，而那个报告的请求其实早就不作数了。
   prodoc.checking = false;
@@ -148,6 +191,14 @@ export function check(teamId: string | null, core: string | null): void {
   if (!prodoc.root) return;
   prodoc.checking = true;
   sendCommand({ ProDocCheck: { team_id: teamId ?? undefined, root: prodoc.root } }, core ?? undefined);
+}
+
+/** 当前打开的根的显示信息（顶栏用；找不到时回落成路径本身）。 */
+export function activeRoot(core: string | null): ProDocRoot | null {
+  void core;
+  if (!prodoc.root) return null;
+  const known = prodoc.roots.find((item) => item.path === prodoc.root);
+  return known ?? { label: prodoc.root, path: prodoc.root, hint: prodoc.root };
 }
 
 /** 当前根的检查报告（没有则 null）。 */
@@ -178,6 +229,15 @@ function setup(context: PanelAppContext): void {
       for (const error of errors) applyError(error);
       if (roots) {
         prodoc.roots = roots.roots;
+        // 恢复上次打开的根——但**只在它仍允许访问时**：配置可能已经删掉了
+        // 那个目录，硬恢复会让画布直接报"必须在允许范围内"。
+        const remembered = recallRoot(context.teamId.value ?? null, context.core.value ?? null);
+        if (!prodoc.root && remembered && roots.roots.some((item) => item.path === remembered)) {
+          openRoot(context.teamId.value ?? null, context.core.value ?? null, remembered);
+        } else if (prodoc.root && !roots.roots.some((item) => item.path === prodoc.root)) {
+          // 当前打开的根已从配置里移除：退出来并说明，而不是继续用旧快照。
+          prodoc.root = null;
+        }
         if (roots.caps) {
           prodoc.caps = {
             max_files: roots.caps.max_files ?? 0,

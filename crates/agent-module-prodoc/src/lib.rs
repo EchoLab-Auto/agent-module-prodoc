@@ -110,8 +110,19 @@ impl WriteAck {
 /// 一个可打开的文档根（面板下拉框的一项）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct RootEntry {
-    /// 显示名（路径最后一段）。
+    /// 显示名。
+    ///
+    /// **不是**简单的最后一段：两个根可能都叫 `document`（本机就真实存在
+    /// 这种情况——DocRenderer 的文档群与 Core 仓自己的 document/）。那样
+    /// 面板里是两个一模一样的按钮，用户无法分辨。所以这里取**能区分的
+    /// 最短后缀**（末段不够就往上加一层，直到彼此不同）。
     pub label: String,
+    /// 补充说明（`~` 缩写的路径）。
+    ///
+    /// 与 `label` 的分工：`label` 给人扫读（`DocRenderer/document`），
+    /// `hint` 给确认（`~/code_file/gitlab/echo-tech/DocRenderer/document`）。
+    /// 只靠 label 短、只靠 hint 长，两者一起才好认。
+    pub hint: String,
     /// 绝对路径。
     pub path: String,
 }
