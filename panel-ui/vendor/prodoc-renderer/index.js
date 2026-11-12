@@ -19,7 +19,7 @@ function me() {
 	for (let e of [...fe]) A(e);
 }
 //#endregion
-//#region ../prodoc-core/dist/search-AsFgefFm.js
+//#region ../prodoc-core/dist/search-DZ0OjMBC.js
 function j(e) {
 	let t = [], n = "", r = null;
 	for (let i of e) r ? (n += i, i === r && (r = null)) : i === "\"" || i === "'" ? (r = i, n += i) : i === "," ? (t.push(n), n = "") : n += i;
@@ -215,7 +215,7 @@ function P(e, t) {
 	return n;
 }
 function Te(e, t, n = {}, r) {
-	let i = n.padding ?? 48, a = n.gapX ?? 64, o = n.gapY ?? 72, s = n.iterations ?? 4, c = n.avoidFixed ?? !0, l = n.wrapThreshold ?? Infinity;
+	let i = n.padding ?? 48, a = n.gapX ?? 80, o = n.gapY ?? 72, s = n.iterations ?? 4, c = n.avoidFixed ?? !0, l = n.wrapThreshold ?? Infinity;
 	new Map(e.map((e) => [e.id, e]));
 	let u = e.map((e) => e.id), d = we(u, t, r), f = u.filter((e) => !t.some((t) => t.to === e)), p = /* @__PURE__ */ new Map();
 	for (let t of e) p.set(t.id, {
