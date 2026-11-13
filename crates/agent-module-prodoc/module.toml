@@ -1,0 +1,12 @@
+# ProDoc 文档群 —— 模块声明（**单一真值**：身份 + 依赖 + 提供）
+#
+# 代码用 `include_str!` 读这个文件构造 manifest（见 `src/lib.rs` 的
+# `manifest()`），改标题/描述不必改 Rust。
+
+id = "echo-agent.prodoc"
+name = "ProDoc 文档群"
+kind = "tool"
+description = "把 Markdown 目录渲染成可交互的文档图画布（ProDoc）"
+builtin = true
+# 随 Core 发布（以 git 依赖参与 Core 构建），不随运行期配置变化。
+tag = "inner"

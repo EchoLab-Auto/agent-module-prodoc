@@ -328,16 +328,16 @@ impl ModuleState {
     }
 }
 
-/// 模块清单。
+/// 模块声明文件——身份写在 TOML 里（单一真值）。
+///
+/// `include_str!` 而不是运行期读盘：清单是编译期常量，散在部署目录里会让
+/// "同一个二进制在不同机器上表现不同"。
+pub const MANIFEST_TOML: &str = include_str!("../module.toml");
+
+/// 模块清单：从 [`MANIFEST_TOML`] 解析，只把版本号留给宿主注入。
 pub fn manifest(version: &str) -> ModuleManifest {
-    ModuleManifest::builtin(
-        MODULE_ID,
-        "ProDoc 文档群",
-        version,
-        "tool",
-        "prodoc",
-        "把 Markdown 目录渲染成可交互的文档图画布（ProDoc）",
-    )
+    ModuleManifest::from_toml(MANIFEST_TOML, version)
+        .expect("agent-module-prodoc 的 module.toml 解析失败")
 }
 
 /// 构造模块（宿主装配期调用一次）。
