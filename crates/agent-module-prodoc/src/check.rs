@@ -94,6 +94,72 @@ impl Report {
     }
 }
 
+/// `ProDocCheck` 命令的**回执**（工具代理读它）。
+///
+/// ## 为什么要有一个具名类型
+///
+/// 此前回执是 `json!({...})` 现场拼的，宿主侧用
+/// `receipt["documents"].as_u64().unwrap_or(0)` 逐字段取——**字段改名或漏写
+/// 会静默变成 0**，工具对模型说"0 个错误"，而实际上有一堆错误。
+///
+/// 现在两侧共用这一个类型：模块用它序列化，宿主反序列化后直接读字段。改名
+/// 时模块与宿主一起编译失败，不会退化。
+///
+/// 字段与旧 `json!` 完全一致（`root`/`documents`/`relations`/`errors`/
+/// `warnings`/`ok`/`issues`），线上兼容。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CheckReceipt {
+    /// 被检查的文档根（回显，便于模型引用）。
+    pub root: String,
+    pub documents: usize,
+    pub relations: usize,
+    pub errors: usize,
+    pub warnings: usize,
+    /// 无错误级问题（警告与提示不影响）。
+    pub ok: bool,
+    pub issues: Vec<ReceiptIssue>,
+}
+
+/// 回执里的一条问题。
+///
+/// 与 [`Issue`] 的差别：`rule` 是 `String` 而不是 `&'static str`（反序列化
+/// 得到的字符串没有静态生命周期）。语义完全一致。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReceiptIssue {
+    /// `"error"` / `"warning"` / `"info"`（[`Level`] 的线格式）。
+    pub level: String,
+    /// 规则名（`broken-link` / `cycle` / …）。
+    pub rule: String,
+    pub message: String,
+    /// 相关文档（相对路径；能定位时给）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+impl CheckReceipt {
+    /// 从报告 + 根路径构造回执。
+    pub fn from_report(root: &str, report: &Report) -> Self {
+        Self {
+            root: root.to_string(),
+            documents: report.stats.documents,
+            relations: report.stats.relations,
+            errors: report.stats.errors,
+            warnings: report.stats.warnings,
+            ok: !report.has_errors(),
+            issues: report
+                .issues
+                .iter()
+                .map(|issue| ReceiptIssue {
+                    level: issue.level.as_str().to_string(),
+                    rule: issue.rule.to_string(),
+                    message: issue.message.clone(),
+                    file: issue.file.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
 // ── 框架参数区解析（与 frame.ts 逐条对齐）──────────────────────────────
 
 /// 参数值（只保留检查需要的判别：字符串 / 数字 / 列表 / 其它）。

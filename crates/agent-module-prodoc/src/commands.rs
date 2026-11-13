@@ -152,20 +152,14 @@ async fn pro_check(
             return Err(message);
         }
     };
-    let stats = report.stats.clone();
-    let has_errors = report.has_errors();
     state.emit_report(team_id.as_deref(), raw, &report);
     // 回执带**完整报告**：面板走事件（不看回执），而工具代理拿的是回执——
     // 它要能把逐条问题念给模型听。两条出口共用同一份数据，不额外存状态。
-    Ok(json!({
-        "root": raw,
-        "documents": stats.documents,
-        "relations": stats.relations,
-        "errors": stats.errors,
-        "warnings": stats.warnings,
-        "ok": !has_errors,
-        "issues": report.issues,
-    }))
+    //
+    // 用 `CheckReceipt` 而不是 `json!` 现场拼：宿主侧读的是**同一个类型**，
+    // 字段改名会让两侧一起编译失败，而不是让工具静默报告"0 个错误"。
+    serde_json::to_value(crate::check::CheckReceipt::from_report(raw, &report))
+        .map_err(|error| format!("检查回执序列化失败: {error}"))
 }
 
 // ── 单文件读写 ───────────────────────────────────────────────────────────
