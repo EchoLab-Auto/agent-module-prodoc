@@ -334,6 +334,17 @@ impl ModuleState {
 /// "同一个二进制在不同机器上表现不同"。
 pub const MANIFEST_TOML: &str = include_str!("../module.toml");
 
+/// 本模块贡献的技能正文（SKILL.md 全文，含 frontmatter）。
+///
+/// **为什么技能随模块走**：`prodoc-format` 讲的是 ProDoc 的文档图模型
+/// （目录即图、文件即框、框架参数区、link 连线、group 分组）。渲染与解析
+/// 都由本 crate 实现，格式规范自然归它——放在 Core 的技能目录里，规范改了
+/// 却忘了同步 Core 就是一次静默的误导。
+///
+/// 只导出正文、不在这里解析：解析器属于技能模块，本 crate 不认识 SKILL.md
+/// 的宿主侧表示。
+pub const SKILL_MARKDOWN: &str = include_str!("../skills/prodoc-format/SKILL.md");
+
 /// 模块清单：从 [`MANIFEST_TOML`] 解析，只把版本号留给宿主注入。
 pub fn manifest(version: &str) -> ModuleManifest {
     ModuleManifest::from_toml(MANIFEST_TOML, version)
