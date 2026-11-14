@@ -183,7 +183,10 @@ export function refresh(teamId: string | null, core: string | null): void {
 
 /** 请求根列表。 */
 export function requestRoots(core: string | null): void {
-  sendCommand({ ProDocRoots: {} }, core ?? undefined);
+  // `ProDocRoots` 是**无载荷变体**（Rust 里是 `ProDocRoots,` 而不是 `ProDocRoots { .. }`），
+  // 线格式就是裸字符串。此前写成 `{ ProDocRoots: {} }`，Core 侧反序列化失败、
+  // 整帧被丢弃——「请求根列表」因此一直静默不生效（刷新按钮点了没反应）。
+  sendCommand('ProDocRoots', core ?? undefined);
 }
 
 /** 跑一次文档图检查（报告走事件，不占回执）。 */
