@@ -74,7 +74,14 @@ fn report_matches_prodoc_cli() {
     assert_eq!(report.stats.warnings, 7, "警告数");
 
     let rules: Vec<&str> = report.issues.iter().map(|issue| issue.rule).collect();
-    for expected in ["broken-link", "duplicate-id", "self-link", "cycle", "orphan", "empty-document"] {
+    for expected in [
+        "broken-link",
+        "duplicate-id",
+        "self-link",
+        "cycle",
+        "orphan",
+        "empty-document",
+    ] {
         assert!(rules.contains(&expected), "缺 {expected}: {rules:?}");
     }
 }

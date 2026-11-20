@@ -120,7 +120,11 @@ pub fn scan(root: &Path, config: &Config) -> Result<Bundle, ScanError> {
         }
         let Ok(entries) = std::fs::read_dir(&dir_real) else {
             bundle.skipped.push(Skipped {
-                path: if prefix.is_empty() { ".".into() } else { prefix.clone() },
+                path: if prefix.is_empty() {
+                    ".".into()
+                } else {
+                    prefix.clone()
+                },
                 reason: "目录不可读".into(),
             });
             continue;
@@ -139,7 +143,10 @@ pub fn scan(root: &Path, config: &Config) -> Result<Bundle, ScanError> {
             };
             let path = entry.path();
             let Ok(metadata) = entry.metadata() else {
-                bundle.skipped.push(Skipped { path: relative, reason: "元数据读取失败".into() });
+                bundle.skipped.push(Skipped {
+                    path: relative,
+                    reason: "元数据读取失败".into(),
+                });
                 continue;
             };
             // `metadata()` 跟随符号链接；指向目录的软链会被当作目录入队，
@@ -262,10 +269,7 @@ mod tests {
         assert_eq!(keys, vec!["guide/intro.md", "project.md"]);
         assert_eq!(bundle.stats.documents, 2);
         // 原文必须逐字保留（含框架参数区与末尾换行）——面板要靠它做 base 比对。
-        assert_eq!(
-            bundle.files["project.md"],
-            "---\nid: p\n---\n# 根\n"
-        );
+        assert_eq!(bundle.files["project.md"], "---\nid: p\n---\n# 根\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -284,11 +288,23 @@ mod tests {
     fn skips_build_and_hidden_dirs() {
         let dir = temp_dir("skip");
         write(&dir, "ok.md", "# ok\n");
-        for skipped in ["node_modules", ".git", "dist", "build", "target", ".obsidian"] {
+        for skipped in [
+            "node_modules",
+            ".git",
+            "dist",
+            "build",
+            "target",
+            ".obsidian",
+        ] {
             write(&dir, &format!("{skipped}/deep.md"), "# 不该出现\n");
         }
         let bundle = scan(&dir, &Config::default()).expect("scan");
-        assert_eq!(bundle.files.len(), 1, "files: {:?}", bundle.files.keys().collect::<Vec<_>>());
+        assert_eq!(
+            bundle.files.len(),
+            1,
+            "files: {:?}",
+            bundle.files.keys().collect::<Vec<_>>()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

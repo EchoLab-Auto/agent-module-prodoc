@@ -235,11 +235,14 @@ mod tests {
             WriteOutcome::Conflict { disk, .. } => {
                 assert_eq!(disk.as_deref(), Some("disk-version"));
             }
-            other => panic!("expected conflict, got {other:?}", other = match other {
-                WriteOutcome::Written => "Written",
-                WriteOutcome::Failed(_) => "Failed",
-                WriteOutcome::Conflict { .. } => "Conflict",
-            }),
+            other => panic!(
+                "expected conflict, got {other:?}",
+                other = match other {
+                    WriteOutcome::Written => "Written",
+                    WriteOutcome::Failed(_) => "Failed",
+                    WriteOutcome::Conflict { .. } => "Conflict",
+                }
+            ),
         }
         // 冲突时**不能**写盘。
         assert_eq!(
@@ -290,7 +293,10 @@ mod tests {
     fn delete_removes_file() {
         let dir = temp_dir("delete-ok");
         write(&dir, "a.md", "x");
-        assert!(matches!(delete(&dir, "a.md", Some("x")), WriteOutcome::Written));
+        assert!(matches!(
+            delete(&dir, "a.md", Some("x")),
+            WriteOutcome::Written
+        ));
         assert!(!dir.join("a.md").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

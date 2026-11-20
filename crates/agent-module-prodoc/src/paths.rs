@@ -53,7 +53,11 @@ pub fn resolve(root: &Path, relative: &str) -> Result<PathBuf, PathError> {
 
     let root_real = std::fs::canonicalize(root).map_err(|_| PathError::NoParent)?;
     // 前缀带分隔符：`/docs` 不能匹配 `/docs-old`。
-    let prefix = format!("{}{}", root_real.to_string_lossy(), std::path::MAIN_SEPARATOR);
+    let prefix = format!(
+        "{}{}",
+        root_real.to_string_lossy(),
+        std::path::MAIN_SEPARATOR
+    );
     let full = root_real.join(relative);
     let full_text = full.to_string_lossy().into_owned();
     if !full_text.starts_with(&prefix) {
@@ -116,7 +120,10 @@ mod tests {
             resolve(&dir, "/etc/passwd.md"),
             Err(PathError::Invalid(_))
         ));
-        assert_eq!(resolve(&dir, "guide/intro.txt"), Err(PathError::NotMarkdown));
+        assert_eq!(
+            resolve(&dir, "guide/intro.txt"),
+            Err(PathError::NotMarkdown)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

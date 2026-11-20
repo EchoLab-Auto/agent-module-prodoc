@@ -235,7 +235,11 @@ impl ModuleState {
 
     /// 发一条模块事件（无出口时静默丢弃——单测 / 裸装配场景）。
     pub fn emit_event(&self, name: &str, payload: Value) {
-        let sink = self.emit.read().ok().and_then(|slot| slot.as_ref().cloned());
+        let sink = self
+            .emit
+            .read()
+            .ok()
+            .and_then(|slot| slot.as_ref().cloned());
         if let Some(sink) = sink {
             sink(echo_module::ModuleEvent::new(MODULE_ID, name, payload));
         }
@@ -271,12 +275,7 @@ impl ModuleState {
     }
 
     /// 推目录选择器的一层。
-    pub fn emit_dirs(
-        &self,
-        path: Option<&str>,
-        roots: &[RootEntry],
-        entries: &[DirEntry],
-    ) {
+    pub fn emit_dirs(&self, path: Option<&str>, roots: &[RootEntry], entries: &[DirEntry]) {
         self.emit_event(
             events::DIRS,
             json!({

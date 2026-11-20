@@ -679,7 +679,10 @@ pub fn check(files: &BTreeMap<String, String>) -> Report {
             report.issues.push(Issue {
                 level: Level::Warning,
                 rule: "cycle",
-                message: format!("检测到循环连线（{}）：环上文档排在同一层", component.join("、")),
+                message: format!(
+                    "检测到循环连线（{}）：环上文档排在同一层",
+                    component.join("、")
+                ),
                 file: None,
             });
         }
@@ -733,7 +736,10 @@ pub fn check(files: &BTreeMap<String, String>) -> Report {
             report.issues.push(Issue {
                 level: Level::Warning,
                 rule: "orphan",
-                message: format!("「{}」没有任何连线（既非起点也非终点），在大图上会孤立漂浮", doc.title),
+                message: format!(
+                    "「{}」没有任何连线（既非起点也非终点），在大图上会孤立漂浮",
+                    doc.title
+                ),
                 file: Some(doc.doc_path.clone()),
             });
         }
@@ -868,7 +874,10 @@ fn strongly_connected(docs: &[Doc], relations: &BTreeSet<(String, String)>) -> V
         adjacency.entry(doc.id.as_str()).or_default();
     }
     for (from, to) in relations {
-        adjacency.entry(from.as_str()).or_default().push(to.as_str());
+        adjacency
+            .entry(from.as_str())
+            .or_default()
+            .push(to.as_str());
     }
 
     struct State<'a> {
@@ -993,7 +1002,10 @@ mod tests {
     #[test]
     fn refs_split_on_comma_space_only() {
         let param = Param::Str("a.md, b.md".into());
-        assert_eq!(as_refs(Some(&param)), vec!["a.md".to_string(), "b.md".to_string()]);
+        assert_eq!(
+            as_refs(Some(&param)),
+            vec!["a.md".to_string(), "b.md".to_string()]
+        );
         let param = Param::Str("a,b.md".into());
         assert_eq!(as_refs(Some(&param)), vec!["a,b.md".to_string()]);
     }
@@ -1046,9 +1058,10 @@ mod tests {
 
     #[test]
     fn broken_link_is_an_error() {
-        let report = check(&files(&[
-            ("a.md", "---\nid: a\nlink: [\"ghost\"]\n---\n# A\n"),
-        ]));
+        let report = check(&files(&[(
+            "a.md",
+            "---\nid: a\nlink: [\"ghost\"]\n---\n# A\n",
+        )]));
         assert!(report.has_errors());
         assert!(rules(&report).contains(&"broken-link"));
         assert!(report
@@ -1167,9 +1180,10 @@ mod tests {
     /// 排序稳定：error 先于 warning 先于 info。
     #[test]
     fn issues_are_sorted_by_level() {
-        let report = check(&files(&[
-            ("ghost.md", "---\nid: ghost\nlink: [\"nope\"]\n---\n"),
-        ]));
+        let report = check(&files(&[(
+            "ghost.md",
+            "---\nid: ghost\nlink: [\"nope\"]\n---\n",
+        )]));
         let levels: Vec<Level> = report.issues.iter().map(|issue| issue.level).collect();
         let mut sorted = levels.clone();
         sorted.sort();

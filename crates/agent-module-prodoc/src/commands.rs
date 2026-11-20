@@ -38,7 +38,11 @@ pub const COMMANDS: [&str; 7] = [
 ];
 
 /// 命令入口（返回 `None` = 不认领，不是错误）。
-pub async fn handle(state: &ModuleState, name: &str, payload: Value) -> Option<Result<Value, String>> {
+pub async fn handle(
+    state: &ModuleState,
+    name: &str,
+    payload: Value,
+) -> Option<Result<Value, String>> {
     if !COMMANDS.contains(&name) {
         return None;
     }
@@ -200,7 +204,8 @@ fn read_file(
     team_id: Option<String>,
     payload: &Value,
 ) -> Result<Value, String> {
-    let (root, path, request_id) = write_target(state, team_id.as_deref(), payload, "ReadProDocFile")?;
+    let (root, path, request_id) =
+        write_target(state, team_id.as_deref(), payload, "ReadProDocFile")?;
     let mut ack = write::read(&root, path);
     ack.request_id = request_id.map(str::to_string);
     ack.team_id = team_id;
@@ -219,7 +224,8 @@ async fn save_file(
     team_id: Option<String>,
     payload: &Value,
 ) -> Result<Value, String> {
-    let (root, path, request_id) = write_target(state, team_id.as_deref(), payload, "SaveProDocFile")?;
+    let (root, path, request_id) =
+        write_target(state, team_id.as_deref(), payload, "SaveProDocFile")?;
     let content = required(payload, "content", "SaveProDocFile")?.to_string();
     let base = payload.get("base").and_then(|value| value.as_str());
     // 写盘是阻塞 IO：文档目录可能在网络盘上，一次 rename 就能卡住整条命令通道。
@@ -227,7 +233,12 @@ async fn save_file(
     let path_for_task = path.to_string();
     let base_for_task = base.map(str::to_string);
     let outcome = tokio::task::spawn_blocking(move || {
-        write::save(&root_for_task, &path_for_task, &content, base_for_task.as_deref())
+        write::save(
+            &root_for_task,
+            &path_for_task,
+            &content,
+            base_for_task.as_deref(),
+        )
     })
     .await
     .map_err(|error| format!("保存任务失败: {error}"))?;
@@ -368,8 +379,15 @@ fn disambiguated_labels(roots: &[PathBuf]) -> Vec<String> {
 
     let mut depth = 1;
     loop {
-        let labels: Vec<String> = roots.iter().map(|root| tail_segments(root, depth)).collect();
-        let unique = labels.iter().collect::<std::collections::HashSet<_>>().len() == labels.len();
+        let labels: Vec<String> = roots
+            .iter()
+            .map(|root| tail_segments(root, depth))
+            .collect();
+        let unique = labels
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == labels.len();
         // 到最深层还撞（两个根字面相同）就没得再区分了，接受重复。
         if unique || depth >= max_depth {
             return labels;
@@ -535,7 +553,9 @@ mod tests {
         {
             let seen = seen.clone();
             state.set_event_sink(std::sync::Arc::new(move |event| {
-                seen.lock().unwrap().push((event.name.clone(), event.payload.clone()));
+                seen.lock()
+                    .unwrap()
+                    .push((event.name.clone(), event.payload.clone()));
             }));
         }
 
@@ -550,7 +570,10 @@ mod tests {
         assert_eq!(receipt["documents"], 2);
 
         let events = seen.lock().unwrap().clone();
-        let (name, payload) = events.iter().find(|(name, _)| name == crate::events::BUNDLE).expect("bundle event");
+        let (name, payload) = events
+            .iter()
+            .find(|(name, _)| name == crate::events::BUNDLE)
+            .expect("bundle event");
         assert_eq!(name, crate::events::BUNDLE);
         assert_eq!(payload["team_id"], "t");
         assert!(payload["files"]["guide/a.md"].is_string());
@@ -591,7 +614,9 @@ mod tests {
         {
             let seen = seen.clone();
             state.set_event_sink(std::sync::Arc::new(move |event| {
-                seen.lock().unwrap().push((event.name.clone(), event.payload.clone()));
+                seen.lock()
+                    .unwrap()
+                    .push((event.name.clone(), event.payload.clone()));
             }));
         }
 
@@ -634,7 +659,9 @@ mod tests {
     }
 
     /// 写命令的事件收集器（与快照测试共用形状）。
-    fn collect_writes(state: &ModuleState) -> std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>> {
+    fn collect_writes(
+        state: &ModuleState,
+    ) -> std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>> {
         let seen: std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>> =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = seen.clone();
@@ -797,7 +824,11 @@ mod tests {
         .expect("claimed");
         assert!(outcome.unwrap_err().contains("允许范围"));
         assert!(!outside.join("x.md").exists());
-        assert_eq!(writes_of(&seen, crate::events::SAVED).len(), 0, "不该发成功回执");
+        assert_eq!(
+            writes_of(&seen, crate::events::SAVED).len(),
+            0,
+            "不该发成功回执"
+        );
         assert_eq!(writes_of(&seen, crate::events::ERROR).len(), 1);
         let _ = std::fs::remove_dir_all(&outside);
     }
@@ -810,8 +841,11 @@ mod tests {
         // 断言变成"依赖别的用例的种子"。
         let root = dir.join("only");
         std::fs::create_dir_all(&root).expect("mkdir");
-        std::fs::write(root.join("a.md"), "---\nid: a\nlink: [\"ghost\"]\n---\n# A\n")
-            .expect("seed");
+        std::fs::write(
+            root.join("a.md"),
+            "---\nid: a\nlink: [\"ghost\"]\n---\n# A\n",
+        )
+        .expect("seed");
         let state = state_with(&root);
         let seen = collect_writes(&state);
 
@@ -884,10 +918,7 @@ mod tests {
     /// 三层才分开的情况也要处理（不能只往上加一层就放弃）。
     #[test]
     fn disambiguation_keeps_climbing_until_unique() {
-        let roots = vec![
-            PathBuf::from("/a/x/docs"),
-            PathBuf::from("/b/x/docs"),
-        ];
+        let roots = vec![PathBuf::from("/a/x/docs"), PathBuf::from("/b/x/docs")];
         let labels = disambiguated_labels(&roots);
         assert_ne!(labels[0], labels[1], "{labels:?}");
         assert_eq!(labels, vec!["a/x/docs".to_string(), "b/x/docs".to_string()]);
@@ -926,8 +957,14 @@ mod tests {
             .expect("应有 prodoc.roots 事件");
         assert_eq!(payload["roots"][0]["label"], "docs");
         assert!(
-            payload["roots"][0]["hint"].as_str().unwrap_or_default().starts_with('/')
-                || payload["roots"][0]["hint"].as_str().unwrap_or_default().starts_with('~'),
+            payload["roots"][0]["hint"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with('/')
+                || payload["roots"][0]["hint"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with('~'),
             "hint 应该是 ~ 缩写或绝对路径: {:?}",
             payload["roots"][0]["hint"]
         );
@@ -944,7 +981,9 @@ mod tests {
         {
             let seen = seen.clone();
             state.set_event_sink(std::sync::Arc::new(move |event| {
-                seen.lock().unwrap().push((event.name.clone(), event.payload.clone()));
+                seen.lock()
+                    .unwrap()
+                    .push((event.name.clone(), event.payload.clone()));
             }));
         }
         handle(&state, "ProDocRoots", json!({}))
