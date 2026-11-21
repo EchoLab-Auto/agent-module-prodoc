@@ -9,6 +9,7 @@ description = "ProDoc 文档群模块：把一棵 Markdown 目录读成文档图
 
 [dependencies]
 echo-module = { workspace = true }
+echo-defs = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

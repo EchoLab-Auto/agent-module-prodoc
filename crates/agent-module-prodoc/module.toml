@@ -10,3 +10,13 @@ description = "把 Markdown 目录渲染成可交互的文档图画布（ProDoc�
 builtin = true
 # 随 Core 发布（以 git 依赖参与 Core 构建），不随运行期配置变化。
 tag = "inner"
+
+# 技能注册接缝（`skills.dir` 提供）。软依赖：缺它时 ProDoc 照常工作，只是
+# 提示词里少 `prodoc-format` 那段规则（正文随本模块的 `mount` 登记）。
+#
+# 第二个作用是**排序**：宿主按 requires + optional_requires 做服务依赖拓扑
+# 排序，技能模块因此先挂载、接缝先就位。
+optional_requires = [
+    "echo-agent.host.skill_registrar",
+]
+

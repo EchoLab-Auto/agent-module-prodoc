@@ -13,6 +13,9 @@ repository = "https://github.com/EchoLab-Auto/agent-module-prodoc"
 # 框架仓（模块 trait / 挂载上下文）。与 EchoAgentCore 根 Cargo.toml 保持同一
 # tag，避免同一进程里出现两份框架类型（`Box<dyn Module>` 不跨版本兼容）。
 echo-module = { git = "https://github.com/EchoLab-Auto/echo-fabric-arch", tag = "v0.19.4" }
+# 定义层：技能注册接缝（`echo_defs::skill::SKILL_REGISTRAR`）与 `Disposer`。
+# 与 Core 同一 main，避免两份 trait 类型。
+echo-defs = { git = "https://github.com/EchoLab-Auto/EchoAgentCore", branch = "main" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

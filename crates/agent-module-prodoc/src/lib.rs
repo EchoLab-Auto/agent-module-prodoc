@@ -389,7 +389,7 @@ pub fn module_with_state(version: &str) -> (Arc<dyn Module>, Arc<ModuleState>) {
             if let Some(sink) = &ctx.events {
                 mount_state.set_event_sink(sink.clone());
             }
-            Ok(Vec::new())
+            Ok(register_skill(ctx))
         })
         .with_commands(commands::COMMANDS.iter().copied())
         .with_command_handler_async(move |name, payload| {
@@ -435,4 +435,40 @@ mod tests {
         state.emit_error(Some("t"), "/docs", "boom");
         state.emit_bundle(&bundle::Bundle::default());
     }
+}
+
+/// 把 `skills/prodoc-format/SKILL.md` 交给技能模块登记（2026-11）。
+///
+/// ## 为什么交给模块自己，而不是宿主的硬编码清单
+///
+/// 归属此前写在 Core 的 `builtin_modules::skill_contributions()` 里，于是
+/// 模块被 `enabled = false` 关掉时技能照样进提示词——模型被教了一套本部署
+/// 没有的文档命令；新增模块也必须改 Core。登记挪到这里后，技能的有无与
+/// 挂载状态是同一件事，卸载时由 disposer 撤销。
+///
+/// 正文只交不解析：SKILL.md 的 frontmatter 规则属于技能模块（注册接缝
+/// 在 `echo-defs`），本 crate 因此不必依赖解析器。
+///
+/// 接缝缺席 / 登记失败都只是**降级**（`module.toml` 里的 `optional_requires`
+/// 是软依赖）：ProDoc 的读写与渲染不依赖这段提示词，挂载失败代价大得多。
+fn register_skill(ctx: &echo_module::MountContext) -> Vec<echo_defs::Disposer> {
+    let Some(context) = ctx.context() else {
+        return Vec::new();
+    };
+    let Some(registrar) = context.service(&echo_defs::skill::SKILL_REGISTRAR) else {
+        tracing::warn!(
+            module = MODULE_ID,
+            "技能注册接缝缺席：prodoc-format 未进提示词（宿主未挂载 skills.dir）"
+        );
+        return Vec::new();
+    };
+    if let Err(error) =
+        registrar.register_markdown(MODULE_ID, &[(SKILL_MARKDOWN, "prodoc-format")])
+    {
+        tracing::warn!(module = MODULE_ID, %error, "技能登记失败");
+        return Vec::new();
+    }
+    vec![echo_defs::Disposer::from_fn(move || {
+        registrar.unregister(MODULE_ID);
+    })]
 }
