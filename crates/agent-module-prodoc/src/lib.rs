@@ -389,7 +389,13 @@ pub fn module_with_state(version: &str) -> (Arc<dyn Module>, Arc<ModuleState>) {
             if let Some(sink) = &ctx.events {
                 mount_state.set_event_sink(sink.clone());
             }
-            Ok(register_skill(ctx))
+            // 面板 UI 贡献（2026-11）：把本模块的**前端 bundle** 登记给
+            // Core，面板启动时经 `echo-agent.panel-ui.list` 拿到清单再
+            // `import()`。此前只能靠 `PANEL_UI_EXTENSIONS` 在面板构建期编进
+            // 产物——改一行 UI 要重建整个面板。
+            let mut keeps = register_skill(ctx);
+            keeps.extend(register_panel_ui(ctx));
+            Ok(keeps)
         })
         .with_commands(commands::COMMANDS.iter().copied())
         .with_command_handler_async(move |name, payload| {
@@ -451,6 +457,43 @@ mod tests {
 ///
 /// 接缝缺席 / 登记失败都只是**降级**（`module.toml` 里的 `optional_requires`
 /// 是软依赖）：ProDoc 的读写与渲染不依赖这段提示词，挂载失败代价大得多。
+/// 本模块的面板 UI 贡献（bundle 的站点相对路径）。
+///
+/// 固定路径不带 hash：面板运行期靠它 `import()`，名字一变就失联。prodoc 的
+/// 渲染器是**预构建产物**（`panel-ui/vendor/prodoc-renderer`），会额外产出
+/// 若干带 hash 的 chunk——那些由 index.js 相对引用，跟它一起部署即可。
+pub const PANEL_UI_BUNDLE: &str = "panel-extensions/echo-agent.prodoc/index.js";
+
+/// 面板 UI SDK 契约版本（与 Panel 仓 `panel-shared.entries.json` 一致）。
+pub const PANEL_UI_SDK_VERSION: &str = "1";
+
+/// 向 Core 登记本模块的面板 UI 贡献。
+///
+/// 注册表缺席是降级（嵌入式部署没有宿主）；登记失败不阻止挂载——文档能力
+/// 本身仍可用，缺的只是界面入口。
+fn register_panel_ui(mctx: &echo_module::MountContext) -> Vec<echo_defs::Disposer> {
+    let Some(registrar) = mctx.service(&echo_defs::panel_ui::PANEL_UI_REGISTRAR) else {
+        tracing::debug!(
+            module = MODULE_ID,
+            "宿主未提供面板 UI 注册表；本模块的界面入口不可用（嵌入式部署常见）"
+        );
+        return Vec::new();
+    };
+    let contribution = echo_defs::panel_ui::PanelUiContribution {
+        id: MODULE_ID.to_string(),
+        name: "文档群".to_string(),
+        bundle: PANEL_UI_BUNDLE.to_string(),
+        sdk_version: PANEL_UI_SDK_VERSION.to_string(),
+    };
+    match registrar.register(contribution) {
+        Ok(disposer) => vec![disposer],
+        Err(error) => {
+            tracing::warn!(module = MODULE_ID, %error, "面板 UI 贡献登记失败");
+            Vec::new()
+        }
+    }
+}
+
 fn register_skill(ctx: &echo_module::MountContext) -> Vec<echo_defs::Disposer> {
     let Some(context) = ctx.context() else {
         return Vec::new();

@@ -2,3 +2,7 @@
 Cargo.lock.bak
 .DS_Store
 node_modules
+
+# 模块 UI 的构建产物：由部署脚本复制到 Panel 静态目录
+panel-ui/dist/
+panel-ui/node_modules/
