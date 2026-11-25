@@ -1,0 +1,114 @@
+--- /tmp/vendor-index-before.js	2026-11-25 05:26:54.632741571 +0000
++++ vendor/prodoc-renderer/index.js	2026-11-25 05:27:25.298353248 +0000
+@@ -1550,6 +1550,11 @@
+ 			} else j(`「${t}」${e}失败：${n.error ?? "未知错误"}`, "error", 6e3);
+ 		}
+ 		let M = g(/* @__PURE__ */ new Map()), N = g(/* @__PURE__ */ new Set()), P = /* @__PURE__ */ new Map(), Ee = t(() => M.value.size > 0 || N.value.size > 0), F = g([]), I = g([]);
++		// ── 本地补丁（2026-11）：分层重排的落盘出口 ──────────────────────
++		// `G`（覆盖表）原本只是视图变换，"保存"只遍历草稿 `M`，所以重排后的
++		// 坐标没有任何写回路径。这三个状态补上那条路径（见 saveRelayout）。
++		// 注意：本文件是上游 dist 的 vendored 产物，改动需同步回 DocRenderer。
++		let layoutSavedFlag = g(false), layoutSavingFlag = g(false), layoutDoneFlag = t(() => G.value !== null && layoutSavedFlag.value);
+ 		function L() {
+ 			return {
+ 				drafts: [...M.value],
+@@ -2003,7 +2008,7 @@
+ 		}
+ 		function dr(e, t) {
+ 			let n = new Map(G.value ?? []);
+-			n.set(e, t), G.value = n;
++			n.set(e, t), G.value = n, layoutSavedFlag.value = false;
+ 		}
+ 		let fr = t(() => {
+ 			let e = ki.value, t = Ai.value;
+@@ -2029,6 +2034,7 @@
+ 		}), pr = (e) => W.value !== null && !e.members.some((e) => tr.value.has(e));
+ 		function mr() {
+ 			if (G.value) {
++				if (layoutSavedFlag.value) return;
+ 				G.value = null, ar.value = null;
+ 				return;
+ 			}
+@@ -2044,7 +2050,62 @@
+ 				let t = z.value.boxes.find((t) => t.docPath === e);
+ 				t && n.delete(t.id);
+ 			}
+-			G.value = n, ar.value = t.routes;
++			G.value = n, ar.value = t.routes, layoutSavedFlag.value = false;
++		}
++		/**
++		 * 💾 保存布局：把覆盖表里的坐标写回各文件的参数区。
++		 *
++		 * 与编辑模式的「💾 保存」（Er）是两条独立通道：那个存内容草稿，需要先进
++		 * 编辑模式；这个存坐标，预览态就能点——重排完不该被迫进编辑模式才能落盘。
++		 *
++		 * 只处理 docPath 非空、且坐标确实与文件不同的框：分组超节点是渲染期构造
++		 * 的（docPath 为空），坐标一致时写盘只白增一次冲突基准漂移。
++		 *
++		 * 失败的文件保留在覆盖表里（画布仍是用户看到的样子），只 toast 提示——
++		 * 丢掉预览再让人重排一遍是最差的处理。
++		 */
++		async function saveRelayout() {
++			let e = G.value;
++			if (!e || layoutSavingFlag.value || layoutSavedFlag.value) return;
++			let t = [];
++			for (let [n, r] of e) {
++				let i = z.value.boxes.find((t) => t.id === n);
++				if (!i || !i.docPath) continue;
++				if (i.x === r.x && i.y === r.y) continue;
++				t.push({
++					id: n,
++					path: i.docPath
++				});
++			}
++			if (t.length === 0) {
++				layoutSavedFlag.value = true, j("布局与文件坐标一致，无需写入", "info", 3e3);
++				return;
++			}
++			layoutSavingFlag.value = true;
++			let n = [], r = 0, d = 0;
++			for (let { id: i, path: a } of t) {
++				let o = O.files[a];
++				if (o === void 0) continue;
++				// 有未保存的正文草稿：跳过。这里只能用磁盘原文当基准，拿它去写
++				// 坐标会把草稿里的正文改动一并冲掉——那篇交给编辑模式的「💾 保存」。
++				if (M.value.has(a)) {
++					d++;
++					continue;
++				}
++				let s = e.get(i), c = Ce(o, {
++					x: s.x,
++					y: s.y
++				});
++				if (c === o) continue;
++				let l = await he(a, c, o);
++				l.ok ? r++ : (n.push(a), we("保存", a, l));
++			}
++			layoutSavingFlag.value = false;
++			if (n.length > 0) {
++				j(`布局保存失败 ${n.length} 篇（预览已保留，可刷新页面同步磁盘后重试）`, "error", 6e3);
++				return;
++			}
++			layoutSavedFlag.value = true, j(d > 0 ? `布局已保存（${r} 篇；另 ${d} 篇有未保存的正文修改，请用编辑模式的保存）` : `布局已保存（${r} 篇）`, "success", d > 0 ? 6e3 : 3e3);
+ 		}
+ 		let hr = (e) => e.blocks.slice(0, 6), gr = (e) => Math.max(0, e.blocks.length - 6), _r = (e) => (hr(e).length + +(gr(e) > 0)) * An + 12, vr = (e) => e.y + e.h + 6 + _r(e) > Zn.value.y + Zn.value.h, q = g(!1), J = g("select"), Y = /* @__PURE__ */ new Set(), yr = g({
+ 			title: "",
+@@ -3013,8 +3074,17 @@
+ 					}, "🛠 编辑图")),
+ 					a("button", {
+ 						class: "pd-back-btn",
++						disabled: layoutDoneFlag.value,
++						title: layoutDoneFlag.value ? "这批坐标已写回文件；要重新排布请刷新后点「分层重排」" : void 0,
+ 						onClick: mr
+-					}, v(G.value ? "↩ 恢复坐标" : "🧭 分层重排"), 1),
++					}, v(layoutDoneFlag.value ? "✓ 布局已保存" : G.value ? "↩ 恢复坐标" : "🧭 分层重排"), -2),
++					G.value && !layoutDoneFlag.value ? (h(), i("button", {
++						key: 3,
++						class: "pd-back-btn",
++						disabled: layoutSavingFlag.value,
++						title: "把这些坐标写回各文件参数区",
++						onClick: saveRelayout
++					}, "💾 保存布局", -2)) : r("", !0),
+ 					z.value.groups.length ? (h(), i("button", {
+ 						key: 2,
+ 						class: "pd-back-btn",

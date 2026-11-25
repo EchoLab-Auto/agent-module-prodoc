@@ -50,6 +50,11 @@ PANEL_UI_EXTENSIONS=/abs/path/to/agent-module-prodoc/panel-ui npm test
 | `vendor/prodoc-renderer/` | `index.js` + `index.css` + 精简 `index.d.ts` | `DocRenderer/packages/prodoc-renderer/dist` |
 | `vendor/prodoc-core/` | `pure.js` + 其依赖 chunk + 精简 `pure.d.ts` | `DocRenderer/packages/prodoc-core/dist`（只用 `merge3`） |
 
+### 本地补丁
+
+`vendor/` 是构建产物，给它们打的补丁记在 `vendor/patches/`（含每一处的症状、
+原因与升级时如何重放）。升级覆盖 dist 之前先读那份 README，否则补丁会静默丢失。
+
 ## vendored 渲染器
 
 `vendor/prodoc-renderer/` 是 ProDoc 仓 `packages/prodoc-renderer/dist` 的产物
