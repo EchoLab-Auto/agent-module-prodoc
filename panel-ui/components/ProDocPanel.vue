@@ -219,11 +219,13 @@ onMounted(() => {
     <!-- ── 未打开：选目录 ─────────────────────────────────────── -->
     <template v-else>
       <section class="prodoc-picker">
-        <!-- ① 已配置的根：进一个已知位置 -->
+        <!-- ① 发现的文档群：自动识别结果（模块在发现范围里找带 `prodoc: true` 的目录） -->
         <div class="prodoc-section">
           <h3 class="prodoc-section-title">
-            已配置的文档根
-            <span class="prodoc-section-note">来自 Core 的 <code>roots</code> 配置</span>
+            发现的文档群
+            <span class="prodoc-section-note">
+              目录里有文档声明了 <code>prodoc: true</code>
+            </span>
           </h3>
           <ul class="prodoc-root-list">
             <li v-for="root in roots" :key="root.path">
@@ -239,8 +241,9 @@ onMounted(() => {
             </li>
           </ul>
           <p v-if="roots.length === 0" class="prodoc-empty">
-            没有可用的文档根。在 <code>modules.toml</code> 的 <code>[module.config] roots</code>
-            里加一个目录（改完即时生效，无需重启）。
+            没有发现文档群。在文档的参数区（文件最前面的 <code>---</code> 块）里加一行
+            <code>prodoc: true</code>，ProDoc 就会自动把它收进来；发现范围由
+            <code>modules.toml</code> 的 <code>[module.config] roots</code> 决定。
           </p>
           <p class="prodoc-hint">
             上限：{{ prodoc.caps.max_files || '—' }} 篇 /

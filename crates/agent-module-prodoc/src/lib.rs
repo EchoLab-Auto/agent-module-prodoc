@@ -125,6 +125,13 @@ pub struct RootEntry {
     pub hint: String,
     /// 绝对路径。
     pub path: String,
+    /// 该目录是否声明为文档群（参数区带 `prodoc: true`）。
+    ///
+    /// 发现的条目恒为 `true`；保留这个字段是因为 `RootEntry` 也被目录选择器
+    /// 复用，那里可能出现"配置里有、但还没打标记"的路径——面板据此显示
+    /// 「未标记」而不是给一个点了打不开的按钮。
+    #[serde(default)]
+    pub prodoc: bool,
 }
 
 /// 目录选择器的一层条目（只列子目录——选的是"文档根"，不是文件）。
@@ -157,8 +164,15 @@ impl Caps {
 ///
 /// ```toml
 /// [module.config]
-/// # 允许打开的文档根（绝对路径）。空 = 只允许各人格的工作区目录与 HOME。
-/// roots = ["/home/me/docs", "/srv/wiki"]
+/// # 发现范围（绝对路径）。ProDoc 在这些树下递归找带 `prodoc: true` 标记的
+/// # 文档群；空 = 回退 HOME（容器内就是 /root，会把整棵家目录当候选）。
+/// roots = ["/srv/docs", "/home/me/wiki"]
+/// # 是否要求文档带标记才能打开（默认 true）。关掉即恢复"任何含 .md 的目录
+/// # 都能打开"的旧行为——只应该在做迁移时临时打开。
+/// require_marker = true
+/// # 发现时向下递归的最大层数（默认 4）。文档群通常嵌在 `<repo>/document/`，
+/// # 2 层足够；调大只会让大仓库的发现更慢。
+/// discover_depth = 4
 /// # 上限可按需放宽（缺省即下方 `Default`）。
 /// max_file_bytes = 1048576
 /// max_files = 2000
@@ -167,11 +181,22 @@ impl Caps {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// 允许打开的根目录（面板的目录选择器只能在这些树下走）。
+    /// **发现范围**（也是沙箱边界）：面板只能在这些树下打开文档群。
+    ///
+    /// 两件事共用这一份列表，因为它们必须一致——如果发现范围比沙箱宽，
+    /// 面板会列出点不开的项；如果沙箱比发现范围宽，用户又能用别的路径绕开
+    /// 识别。
     ///
     /// 刻意**不**默认放开整个文件系统：文档根一旦可任意指定，模块就成了一个
     /// "读任意 `.md`"的接口，而 Core 的工作区目录集合本来就有明确边界。
     pub roots: Vec<String>,
+    /// 是否要求文档带 `prodoc: true` 标记才允许打开（默认 `true`）。
+    ///
+    /// 这是「自动识别」的另一半：只发现自己声明的文档群，而不是任何含
+    /// `.md` 的目录。关掉它等于回到旧行为（任何含 `.md` 的目录都能打开）。
+    pub require_marker: bool,
+    /// 发现时向下递归的最大层数（root 自身是第 0 层）。
+    pub discover_depth: usize,
     /// 单文件字节上限（UTF-8 原文长度）。
     pub max_file_bytes: u64,
     /// 文件篇数上限。
@@ -184,12 +209,20 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             roots: Vec::new(),
+            require_marker: true,
+            discover_depth: 4,
             max_file_bytes: 1024 * 1024,
             max_files: 2000,
             max_total_bytes: 32 * 1024 * 1024,
         }
     }
 }
+
+/// 文档群声明规则的**唯一**措辞。
+///
+/// `SKILL.md`、模块文档、面板提示三处要说同一件事；谁都不该自己编一份。
+pub const MARKER_RULE: &str =
+    "文档群的目录里，至少一篇文档的参数区要写 `prodoc: true`——ProDoc 靠它自动识别";
 
 /// 模块运行期状态。
 ///

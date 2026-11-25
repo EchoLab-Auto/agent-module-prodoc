@@ -39,6 +39,12 @@ pub struct Bundle {
     /// 统计（面板显示"12 篇 / 184 KB"这类摘要）。
     #[serde(default)]
     pub stats: Stats,
+    /// 本快照是否**声明为文档群**：至少一篇带参数区标记 `prodoc: true`。
+    ///
+    /// 判据只看标记，不看"有没有 `.md`"——任何仓库根都有 README，用"含 .md"
+    /// 判会把每个仓库都当成文档群。标记是作者显式声明的意图。
+    #[serde(default)]
+    pub prodoc: bool,
 }
 
 /// 一个被跳过的条目。
@@ -216,6 +222,10 @@ pub fn scan(root: &Path, config: &Config) -> Result<Bundle, ScanError> {
     if bundle.files.is_empty() {
         return Err(ScanError::Empty);
     }
+    // 标记判定放在扫描末尾，对内存里已有的原文做一遍参数区解析：文件内容
+    // 已经读进来了，再省这一步也不会少一次 IO，只是把"是否有标记"推迟到
+    // 需要它的地方（`request_bundle` / 发现命令）各算一次。
+    bundle.prodoc = bundle.files.values().any(|content| has_marker(content));
     bundle.stats = Stats {
         documents: bundle.files.len(),
         bytes: total_bytes,
@@ -224,6 +234,86 @@ pub fn scan(root: &Path, config: &Config) -> Result<Bundle, ScanError> {
     };
     Ok(bundle)
 }
+
+/// 文档群标记的键名（参数区里的 `prodoc: true`）。
+pub const MARKER_KEY: &str = "prodoc";
+
+/// 一段 Markdown 原文是否声明了文档群标记。
+///
+/// 判据是**参数区里**的 `prodoc: true`，不是正文里的字符串——解析走
+/// [`crate::check::parse_frame`]，与检查器（`no-frame` 判定）共用同一份规则，
+/// 不会出现"检查器认为有参数区、探测器认为没有"的错位。
+///
+/// 接受 `prodoc: true` 与 `prodoc: "true"` 两种写法（引号值是合法的字符串
+/// 参数，作者写引号不该让识别失败）。
+pub fn has_marker(content: &str) -> bool {
+    let frame = crate::check::parse_frame(content);
+    if !frame.has_frame {
+        return false;
+    }
+    marker_value(frame.params.get(MARKER_KEY))
+}
+
+/// 参数值是否表示"是"（`true` / `"true"`，大小写不敏感）。
+fn marker_value(param: Option<&crate::check::Param>) -> bool {
+    match param {
+        Some(crate::check::Param::Bool(value)) => *value,
+        Some(crate::check::Param::Str(text)) => text.trim().eq_ignore_ascii_case("true"),
+        _ => false,
+    }
+}
+
+/// 探头：一个目录的**直接** `.md` 子文件里是否有文档群标记。
+///
+/// 给发现用——只判断"这一层是不是文档群"，不解析全文、不递归。每个文件
+/// 只读前 [`MARKER_PROBE_BYTES`] 字节：参数区总在文件最前面，没必要为一个
+/// 布尔判断读完整篇（大仓库里几百篇 × 若干层会累积成可观的 IO）。
+///
+/// `MAX_PROBE_FILES` 限制检查篇数：标记是所有篇都有的（迁移时统一加），
+/// 扫到第 50 篇还没有就说明这个目录不是文档群，继续读只是浪费。
+pub fn dir_has_marker(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| is_markdown(name))
+        .collect();
+    // 排序后取前若干个：`read_dir` 顺序随文件系统变化，
+    // 不排序的话"同一个目录两次探测结果不同"会变成偶发 bug。
+    names.sort();
+    names.truncate(MAX_PROBE_FILES);
+    for name in names {
+        let path = dir.join(&name);
+        if probe_file(&path) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 单个文件是否带标记（只读开头一段）。
+fn probe_file(path: &Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buffer = vec![0u8; MARKER_PROBE_BYTES];
+    let Ok(read) = file.read(&mut buffer) else {
+        return false;
+    };
+    buffer.truncate(read);
+    // `from_utf8_lossy` 而不是 `from_utf8().expect`：截断点可能落在多字节
+    // 字符中间，那不该让探测失败（参数区本身是 ASCII，损失不到判据）。
+    has_marker(&String::from_utf8_lossy(&buffer))
+}
+
+/// 探头读多少字节（参数区总在文件最前面；8 KB 已远超常见参数区）。
+const MARKER_PROBE_BYTES: usize = 8 * 1024;
+
+/// 探头最多检查多少篇（见 [`dir_has_marker`]）。
+const MAX_PROBE_FILES: usize = 50;
 
 /// 是否 ProDoc 文档（`.md`，大小写不敏感——Windows/macOS 上 `.MD` 很常见）。
 fn is_markdown(name: &str) -> bool {
@@ -366,6 +456,73 @@ mod tests {
             }
             other => panic!("expected RootUnavailable, got {other:?}"),
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 文档群标记（`prodoc: true`）────────────────────────────────────
+
+    /// 标记只认参数区里的，正文里出现同样字样不算。
+    #[test]
+    fn marker_must_be_in_frame() {
+        assert!(has_marker("---\nprodoc: true\n---\n# A\n"));
+        // 正文里的字符串不是声明
+        assert!(!has_marker("# A\n\n在参数区写 prodoc: true 就能识别\n"));
+        // 没有参数区
+        assert!(!has_marker("prodoc: true\n# A\n"));
+    }
+
+    /// `false` / 无此键 / 值不是布尔真 → 都不算声明。
+    #[test]
+    fn marker_only_true_counts() {
+        assert!(!has_marker("---\nprodoc: false\n---\n# A\n"));
+        assert!(!has_marker("---\nid: a\n---\n# A\n"));
+        assert!(!has_marker("---\nprodoc: \n---\n# A\n"));
+        // 引号写法同样有效（作者加引号不该让识别失败）
+        assert!(has_marker("---\nprodoc: \"true\"\n---\n# A\n"));
+        assert!(has_marker("---\nprodoc: TRUE\n---\n# A\n"));
+    }
+
+    /// 参数区未闭合 → 整篇按正文处理，标记不生效（与检查器的 `no-frame` 一致）。
+    #[test]
+    fn unclosed_frame_has_no_marker() {
+        assert!(!has_marker("---\nprodoc: true\n# A\n"));
+    }
+
+    /// 扫描结果带上"本快照是否声明为文档群"。
+    #[test]
+    fn scan_reports_marker() {
+        let marked = temp_dir("marker-yes");
+        write(&marked, "a.md", "---\nprodoc: true\n---\n# A\n");
+        write(&marked, "b.md", "# B\n");
+        assert!(scan(&marked, &Config::default()).expect("scan").prodoc);
+
+        let plain = temp_dir("marker-no");
+        write(&plain, "a.md", "# A\n");
+        assert!(!scan(&plain, &Config::default()).expect("scan").prodoc);
+
+        let _ = std::fs::remove_dir_all(&marked);
+        let _ = std::fs::remove_dir_all(&plain);
+    }
+
+    /// 探头只看**直接**子文件：子目录里的标记不属于这一层。
+    #[test]
+    fn probe_ignores_nested_marker() {
+        let dir = temp_dir("probe");
+        write(&dir, "project.md", "---\nid: p\n---\n# P\n");
+        write(&dir, "deep/guide.md", "---\nprodoc: true\n---\n# G\n");
+        assert!(!dir_has_marker(&dir), "子目录的标记不该让父目录成立");
+        assert!(dir_has_marker(&dir.join("deep")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 探头容忍截断在多字节字符中间（`from_utf8_lossy`）。
+    #[test]
+    fn probe_survives_truncated_multibyte() {
+        let dir = temp_dir("probe-utf8");
+        // 参数区之后紧跟大量中文：8 KB 截断点必然落在某个汉字中间
+        let body = "中文".repeat(MARKER_PROBE_BYTES);
+        write(&dir, "a.md", &format!("---\nprodoc: true\n---\n{body}"));
+        assert!(dir_has_marker(&dir));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -58,11 +58,21 @@ export interface ProDocRoot {
   path: string;
   /** `~` 缩写的路径（旧版模块没有这个字段，回落为空串）。 */
   hint?: string;
+  /**
+   * 该目录是否声明为文档群（参数区带 `prodoc: true`）。
+   *
+   * 2026-11 起 `prodoc.roots` 返回的是**发现的**文档群，所以这里恒为
+   * `true`；字段保留给"配置里有、但还没打标记"的路径——那种项应显示成
+   * 不可打开，而不是给一个点了就报错的按钮。
+   */
+  prodoc?: boolean;
 }
 
 /** 可打开的根（`prodoc.roots`）。 */
 export interface ProDocRootsEvent {
   roots: ProDocRoot[];
+  /** 模块是否要求文档带 `prodoc: true` 标记才能打开（缺省 = 要求）。 */
+  require_marker?: boolean;
   caps?: {
     max_files?: number;
     max_file_bytes?: number;

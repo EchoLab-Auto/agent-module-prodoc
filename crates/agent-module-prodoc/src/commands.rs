@@ -97,6 +97,14 @@ async fn request_bundle(
 
     match scanned {
         Ok(mut bundle) => {
+            // 标记校验（`require_marker`，2026-11）：只有声明了自己是文档群的
+            // 目录才允许打开。没有这一条，自动发现就只是"建议"——用户仍可用
+            // 任意路径打开一个塞满 README 的仓库根，画出一张没有结构的图。
+            if config.require_marker && !bundle.prodoc {
+                let message = marker_error(raw);
+                state.emit_error(team_id.as_deref(), raw, &message);
+                return Err(message);
+            }
             bundle.team_id = team_id.clone();
             let documents = bundle.stats.documents;
             let bytes = bundle.stats.bytes;
@@ -140,13 +148,16 @@ async fn pro_check(
     let scan_config = config.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         let bundle = bundle::scan(&scan_root, &scan_config)?;
-        Ok::<_, ScanError>(check::check(&bundle.files))
+        // 把"是否声明为文档群"带出阻塞块：检查报告与标记校验是两件事，
+        // 但都要同一份扫描结果，分两次扫描等于读两遍目录。
+        let prodoc = bundle.prodoc;
+        Ok::<_, ScanError>((prodoc, check::check(&bundle.files)))
     })
     .await
     .map_err(|error| format!("检查任务失败: {error}"))?;
 
-    let report = match outcome {
-        Ok(report) => report,
+    let (prodoc, report) = match outcome {
+        Ok(value) => value,
         Err(error) => {
             let message = match &error {
                 ScanError::RootUnavailable(text) => text.clone(),
@@ -156,6 +167,11 @@ async fn pro_check(
             return Err(message);
         }
     };
+    if config.require_marker && !prodoc {
+        let message = marker_error(raw);
+        state.emit_error(team_id.as_deref(), raw, &message);
+        return Err(message);
+    }
     state.emit_report(team_id.as_deref(), raw, &report);
     // 回执带**完整报告**：面板走事件（不看回执），而工具代理拿的是回执——
     // 它要能把逐条问题念给模型听。两条出口共用同一份数据，不额外存状态。
@@ -164,6 +180,17 @@ async fn pro_check(
     // 字段改名会让两侧一起编译失败，而不是让工具静默报告"0 个错误"。
     serde_json::to_value(crate::check::CheckReceipt::from_report(raw, &report))
         .map_err(|error| format!("检查回执序列化失败: {error}"))
+}
+
+/// 未声明为文档群时的错误文案。
+///
+/// 措辞要同时回答两件事：**为什么打不开** 和 **怎么让它能打开**。
+/// 只说"不是文档群"用户会去翻文档；把标记字段名写进文案，作者当场就能改。
+fn marker_error(raw: &str) -> String {
+    format!(
+        "{raw} 里没有文档群声明：至少一篇文档的参数区要写 `{}: true`",
+        bundle::MARKER_KEY
+    )
 }
 
 // ── 单文件读写 ───────────────────────────────────────────────────────────
@@ -307,7 +334,10 @@ async fn delete_file(
 ///
 /// 刻意**不**复用工作区模块的浏览根：那套以"全部人格工作区目录 ∪ HOME"为根，
 /// 面向的是"给会话选工作目录"；文档根是"我想看这棵文档" —— 边界由配置的
-/// `roots` 决定，缺省时回退到工作区/家目录，语义不同。
+/// 发现范围 `roots` 决定，语义不同。
+///
+/// 空路径返回的是**发现的文档群**（`discover`），不是配置原样：选择器只在
+/// "没有自动发现结果、想手点一个"时才作为兜底入口，列出配置路径没有意义。
 fn browse(state: &ModuleState, payload: &Value) -> Result<Value, String> {
     let config = state.config();
     let requested = payload
@@ -315,12 +345,11 @@ fn browse(state: &ModuleState, payload: &Value) -> Result<Value, String> {
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|path| !path.is_empty());
-    let allowed = root_entries(&config);
-
-    // 空路径 = 根列表。
+    // 空路径 = 根列表（发现的文档群）。
     let Some(requested) = requested else {
-        state.emit_dirs(None, &allowed, &[]);
-        return Ok(json!({"roots": allowed.len(), "entries": 0}));
+        let found = discover(&config);
+        state.emit_dirs(None, &found, &[]);
+        return Ok(json!({"roots": found.len(), "entries": 0}));
     };
 
     let path = PathBuf::from(requested);
@@ -330,30 +359,98 @@ fn browse(state: &ModuleState, payload: &Value) -> Result<Value, String> {
     Ok(json!({"path": requested, "entries": entries.len()}))
 }
 
-/// 可打开的根列表（`ProDocRoots`）。
+/// 可打开的根列表（`ProDocRoots`）——即**发现的文档群**。
 ///
-/// 配置为空时回退到 HOME：模块刚装上、还没配 `roots` 时，面板至少能让人从家
-/// 目录往下走，而不是一个空下拉框。
+/// 语义（2026-11 起）：不是"配置里写了哪些路径"，而是"在配置的发现范围里，
+/// 哪些目录真的声明了自己是文档群"。判据是参数区里的 `prodoc: true`
+/// （见 [`crate::bundle::MARKER_KEY`]）。
+///
+/// 为什么不直接列配置：`roots` 是**发现范围**（通常是几个人格工作区目录，
+/// 每个下面有几十个子目录），把它原样丢给面板的结果是用户要在一堆仓库里
+/// 自己认出哪个是文档群。原来那版还会在配置为空时回退 HOME，等于把整个家
+/// 目录当候选。
 fn roots(state: &ModuleState) -> Result<Value, String> {
     let config = state.config();
-    let entries = root_entries(&config);
+    let entries = discover(&config);
     state.emit_roots(&entries, &Caps::of(&config));
-    Ok(json!({"roots": entries.len(), "configured": !config.roots.is_empty()}))
+    Ok(json!({
+        "roots": entries.len(),
+        "configured": !config.roots.is_empty(),
+        "require_marker": config.require_marker,
+    }))
 }
 
-/// 生效的根列表（面板渲染用）。
-fn root_entries(config: &crate::Config) -> Vec<RootEntry> {
-    let roots = allowed_roots(config);
-    let labels = disambiguated_labels(&roots);
-    roots
+/// 在发现范围里递归找文档群。
+///
+/// 规则（每一条都有它挡掉的具体误判）：
+///
+/// - **命中即止**：一个目录自己带标记就不再往下走。文档群是嵌套的
+///   （`<repo>/document/{core,modules,...}`），不剪枝会把同一个群报成十几个根。
+/// - **realpath 去重**：符号链接成环或两个 root 互相包含时不重复报。
+/// - **深度上限**：`config.discover_depth`。文档群实际都在 1–2 层内，深挖只会
+///   在大仓库上白跑。
+/// - **跳过产物目录与隐藏目录**：与扫描器同一份 [`crate::bundle::SKIP_DIRS`]，
+///   否则 `node_modules` 会让发现慢到不可用。
+fn discover(config: &crate::Config) -> Vec<RootEntry> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for root in allowed_roots(config) {
+        walk_for_marker(&root, 0, config.discover_depth, &mut found, &mut seen);
+    }
+    found.sort();
+    found.dedup();
+    let labels = disambiguated_labels(&found);
+    found
         .into_iter()
         .zip(labels)
         .map(|(root, label)| RootEntry {
             label,
             hint: home_relative(&root),
             path: root.to_string_lossy().into_owned(),
+            prodoc: true,
         })
         .collect()
+}
+
+/// [`discover`] 的递归体。
+fn walk_for_marker(
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    found: &mut Vec<PathBuf>,
+    seen: &mut std::collections::HashSet<PathBuf>,
+) {
+    let Ok(real) = std::fs::canonicalize(dir) else {
+        return;
+    };
+    if !real.is_dir() || !seen.insert(real.clone()) {
+        return;
+    }
+    if crate::bundle::dir_has_marker(&real) {
+        found.push(real);
+        return; // 命中即止：子目录归这个群
+    }
+    if depth >= max_depth {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(&real) else {
+        return;
+    };
+    let mut children: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            !name.starts_with('.') && !crate::bundle::SKIP_DIRS.contains(&name.as_str()) && name != "target"
+        })
+        .map(|entry| entry.path())
+        .collect();
+    // 排序：目录顺序随文件系统变化，不排会让"发现结果的顺序"每次不同，
+    // 面板列表跟着跳动。
+    children.sort();
+    for child in children {
+        walk_for_marker(&child, depth + 1, max_depth, found, seen);
+    }
 }
 
 /// 给每个根算一个**彼此不重名**的显示名。
@@ -524,8 +621,30 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("docs/guide")).expect("mkdir");
-        std::fs::write(dir.join("docs/project.md"), "---\nid: p\n---\n# P\n").expect("write");
+        // 夹具带 `prodoc: true`：2026-11 起「没标记 = 不是文档群」是打开
+        // 文档群的前置条件（`require_marker` 默认开），夹具不声明的话下面
+        // 一半用例都会撞在标记校验上，测的就不是它们本来要测的东西了。
+        std::fs::write(
+            dir.join("docs/project.md"),
+            "---\nprodoc: true\nid: p\n---\n# P\n",
+        )
+        .expect("write");
         std::fs::write(dir.join("docs/guide/a.md"), "# A\n").expect("write");
+        dir
+    }
+
+    /// 空的临时目录（不带任何预制文档）。
+    ///
+    /// 发现类用例要自己布置整棵树：`temp_dir` 里那份带标记的 `docs/` 混进来
+    /// 会让断言变成"依赖别的用例的种子"。
+    fn bare_temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "echo-prodoc-scan-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
         dir
     }
 
@@ -833,6 +952,141 @@ mod tests {
         let _ = std::fs::remove_dir_all(&outside);
     }
 
+    // ── 文档群标记与自动发现（2026-11）──────────────────────────────────
+
+    /// 未声明为文档群的目录打不开（`require_marker` 默认开）。
+    ///
+    /// 这条是「禁止」的落地点：没有它，自动发现只是"建议"——用户仍可用任意
+    /// 路径打开一个塞满 README 的仓库根，画出一张没有结构的图。
+    #[tokio::test]
+    async fn unmarked_root_is_rejected() {
+        let dir = temp_dir("no-marker");
+        // 摘掉标记：夹具默认带 `prodoc: true`
+        std::fs::write(dir.join("docs/project.md"), "---\nid: p\n---\n# P\n").expect("write");
+        let root = dir.join("docs");
+        let state = state_with(&root);
+        let seen = collect_writes(&state);
+
+        let error = handle(
+            &state,
+            "RequestProDocBundle",
+            json!({"root": root.to_string_lossy()}),
+        )
+        .await
+        .expect("claimed")
+        .expect_err("未声明为文档群的目录不该打开");
+        assert!(error.contains("prodoc: true"), "{error}");
+
+        // 面板靠这个事件显示错误条，而不是空画布
+        assert_eq!(writes_of(&seen, crate::events::ERROR).len(), 1);
+        assert_eq!(writes_of(&seen, crate::events::BUNDLE).len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `ProDocCheck` 同样受标记约束（否则它就是一个"读任意 .md"的旁路）。
+    #[tokio::test]
+    async fn unmarked_root_check_is_rejected() {
+        let dir = temp_dir("no-marker-check");
+        std::fs::write(dir.join("docs/project.md"), "---\nid: p\n---\n# P\n").expect("write");
+        let root = dir.join("docs");
+        let state = state_with(&root);
+        let error = handle(
+            &state,
+            "ProDocCheck",
+            json!({"root": root.to_string_lossy()}),
+        )
+        .await
+        .expect("claimed")
+        .expect_err("未声明为文档群的目录不该被检查");
+        assert!(error.contains("prodoc: true"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `require_marker = false` 是迁移期的逃生口：恢复旧行为。
+    #[tokio::test]
+    async fn marker_can_be_disabled() {
+        let dir = temp_dir("marker-off");
+        std::fs::write(dir.join("docs/project.md"), "---\nid: p\n---\n# P\n").expect("write");
+        let root = dir.join("docs");
+        let state = ModuleState::new(Config {
+            roots: vec![root.to_string_lossy().into_owned()],
+            require_marker: false,
+            ..Config::default()
+        });
+        handle(
+            &state,
+            "RequestProDocBundle",
+            json!({"root": root.to_string_lossy()}),
+        )
+        .await
+        .expect("claimed")
+        .expect("关掉 require_marker 后应能打开");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 发现：命中标记即止（父目录吸收子目录），跳过产物目录与隐藏目录。
+    #[tokio::test]
+    async fn discover_finds_shallowest_marked_dirs() {
+        let dir = bare_temp_dir("discover");
+        // 一个文档群：document/ 自己带标记，子目录也带 → 只报 document
+        std::fs::create_dir_all(dir.join("work/repo/document/core")).expect("mkdir");
+        std::fs::write(
+            dir.join("work/repo/document/index.md"),
+            "---\nprodoc: true\n---\n# 目录\n",
+        )
+        .expect("write");
+        std::fs::write(
+            dir.join("work/repo/document/core/a.md"),
+            "---\nprodoc: true\n---\n# A\n",
+        )
+        .expect("write");
+        // 普通仓库（无标记）：不该出现在结果里
+        std::fs::write(dir.join("work/repo/README.md"), "# 不是文档群\n").expect("write");
+        // 产物目录里的标记不算（发现时跳过）
+        std::fs::create_dir_all(dir.join("work/repo/node_modules/pkg")).expect("mkdir");
+        std::fs::write(
+            dir.join("work/repo/node_modules/pkg/x.md"),
+            "---\nprodoc: true\n---\n# X\n",
+        )
+        .expect("write");
+
+        let state = ModuleState::new(Config {
+            roots: vec![dir.to_string_lossy().into_owned()],
+            ..Config::default()
+        });
+        let found = discover(&state.config());
+        let paths: Vec<&str> = found.iter().map(|entry| entry.path.as_str()).collect();
+        assert_eq!(paths.len(), 1, "只报最浅的文档群，got {paths:?}");
+        assert!(paths[0].ends_with("work/repo/document"), "{paths:?}");
+        assert!(found[0].prodoc);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 深度上限：标记埋得太深时不报（否则发现会在大仓库上白跑）。
+    #[tokio::test]
+    async fn discover_respects_depth_limit() {
+        let dir = bare_temp_dir("discover-depth");
+        std::fs::create_dir_all(dir.join("a/b/c/deep")).expect("mkdir");
+        std::fs::write(
+            dir.join("a/b/c/deep/x.md"),
+            "---\nprodoc: true\n---\n# X\n",
+        )
+        .expect("write");
+        let shallow = ModuleState::new(Config {
+            roots: vec![dir.to_string_lossy().into_owned()],
+            discover_depth: 1,
+            ..Config::default()
+        });
+        assert!(discover(&shallow.config()).is_empty());
+        let deep = ModuleState::new(Config {
+            roots: vec![dir.to_string_lossy().into_owned()],
+            discover_depth: 5,
+            ..Config::default()
+        });
+        assert_eq!(discover(&deep.config()).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 检查命令：报告走 `prodoc.report` 事件（含 stats 与逐条 issues）。
     #[tokio::test]
     async fn check_command_emits_report() {
@@ -843,7 +1097,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("mkdir");
         std::fs::write(
             root.join("a.md"),
-            "---\nid: a\nlink: [\"ghost\"]\n---\n# A\n",
+            "---\nprodoc: true\nid: a\nlink: [\"ghost\"]\n---\n# A\n",
         )
         .expect("seed");
         let state = state_with(&root);
