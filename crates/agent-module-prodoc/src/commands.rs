@@ -91,16 +91,25 @@ async fn request_bundle(
     // 这条命令走的是宿主单条命令通道，阻塞它会连累其他模块的命令。
     let scan_root = root.clone();
     let scan_config = config.clone();
-    let scanned = tokio::task::spawn_blocking(move || bundle::scan(&scan_root, &scan_config))
-        .await
-        .map_err(|error| format!("文档扫描失败: {error}"))?;
+    // 标记探头与扫描一起进阻塞块：两者都是文件 IO，分两次 spawn 只会多一次调度。
+    //
+    // 判据是「**这个目录自己**有没有声明」（只看直接子文件），不是「整棵树里有
+    // 没有」——后者会让 `<repo>/README.md` 之类没有标记、但子孙是文档群的仓库根
+    // 通过校验，等于把「禁止打开未声明目录」变成一句空话。
+    let scanned = tokio::task::spawn_blocking(move || {
+        let declared = bundle::dir_has_marker(&scan_root);
+        (declared, bundle::scan(&scan_root, &scan_config))
+    })
+    .await
+    .map_err(|error| format!("文档扫描失败: {error}"))?;
 
+    let (declared, scanned) = scanned;
     match scanned {
         Ok(mut bundle) => {
             // 标记校验（`require_marker`，2026-11）：只有声明了自己是文档群的
             // 目录才允许打开。没有这一条，自动发现就只是"建议"——用户仍可用
             // 任意路径打开一个塞满 README 的仓库根，画出一张没有结构的图。
-            if config.require_marker && !bundle.prodoc {
+            if config.require_marker && !declared {
                 let message = marker_error(raw);
                 state.emit_error(team_id.as_deref(), raw, &message);
                 return Err(message);
@@ -147,16 +156,15 @@ async fn pro_check(
     let scan_root = root.clone();
     let scan_config = config.clone();
     let outcome = tokio::task::spawn_blocking(move || {
+        // 与 `request_bundle` 同口径：**这个目录自己**有没有声明，不是整棵树
+        let declared = bundle::dir_has_marker(&scan_root);
         let bundle = bundle::scan(&scan_root, &scan_config)?;
-        // 把"是否声明为文档群"带出阻塞块：检查报告与标记校验是两件事，
-        // 但都要同一份扫描结果，分两次扫描等于读两遍目录。
-        let prodoc = bundle.prodoc;
-        Ok::<_, ScanError>((prodoc, check::check(&bundle.files)))
+        Ok::<_, ScanError>((declared, check::check(&bundle.files)))
     })
     .await
     .map_err(|error| format!("检查任务失败: {error}"))?;
 
-    let (prodoc, report) = match outcome {
+    let (declared, report) = match outcome {
         Ok(value) => value,
         Err(error) => {
             let message = match &error {
@@ -167,7 +175,7 @@ async fn pro_check(
             return Err(message);
         }
     };
-    if config.require_marker && !prodoc {
+    if config.require_marker && !declared {
         let message = marker_error(raw);
         state.emit_error(team_id.as_deref(), raw, &message);
         return Err(message);
@@ -999,6 +1007,46 @@ mod tests {
         .expect("claimed")
         .expect_err("未声明为文档群的目录不该被检查");
         assert!(error.contains("prodoc: true"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 仓库根自己没声明、只是子孙是文档群 → 同样拒绝。
+    ///
+    /// 这是「禁止」的关键一条：判据必须是**这个目录自己**有没有标记。若退化成
+    /// "整棵树里任一篇有标记"，那 `<repo>/README.md`（无参数区）+ `document/`
+    /// （有标记）的仓库根就能被打开，画出一张把 README/CHANGELOG 都算节点的图。
+    #[tokio::test]
+    async fn unmarked_parent_of_marked_subdir_is_rejected() {
+        let dir = bare_temp_dir("marked-child");
+        std::fs::create_dir_all(dir.join("repo/document")).expect("mkdir");
+        std::fs::write(dir.join("repo/README.md"), "# 仓库说明\n").expect("write");
+        std::fs::write(
+            dir.join("repo/document/a.md"),
+            "---\nprodoc: true\n---\n# A\n",
+        )
+        .expect("write");
+        let state = ModuleState::new(Config {
+            roots: vec![dir.to_string_lossy().into_owned()],
+            ..Config::default()
+        });
+        let error = handle(
+            &state,
+            "RequestProDocBundle",
+            json!({"root": dir.join("repo").to_string_lossy()}),
+        )
+        .await
+        .expect("claimed")
+        .expect_err("仓库根自己没声明，不该打开");
+        assert!(error.contains("prodoc: true"), "{error}");
+        // 子目录本身有声明，能打开
+        handle(
+            &state,
+            "RequestProDocBundle",
+            json!({"root": dir.join("repo/document").to_string_lossy()}),
+        )
+        .await
+        .expect("claimed")
+        .expect("子目录有声明，应能打开");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
