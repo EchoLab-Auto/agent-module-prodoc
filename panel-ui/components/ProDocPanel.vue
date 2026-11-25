@@ -145,17 +145,17 @@ onMounted(() => {
           <NeumorphismButton
             variant="glass"
             shape="pill"
-            size="small"
+            :size="32"
             :disabled="prodoc.checking"
             title="检查文档图：断链 / 重复 id / 环 / 孤立…"
             @click="check(teamId, core)"
           >
             {{ prodoc.checking ? '检查中…' : '检查' }}
           </NeumorphismButton>
-          <NeumorphismButton variant="glass" shape="pill" size="small" @click="refresh(teamId, core)">
+          <NeumorphismButton variant="glass" shape="pill" :size="32" @click="refresh(teamId, core)">
             刷新
           </NeumorphismButton>
-          <NeumorphismButton variant="glass" shape="pill" size="small" @click="back">
+          <NeumorphismButton variant="glass" shape="pill" :size="32" @click="back">
             换目录
           </NeumorphismButton>
         </div>
@@ -264,7 +264,7 @@ onMounted(() => {
               v-if="prodoc.browsePath"
               variant="glass"
               shape="pill"
-              size="small"
+              :size="32"
               @click="up"
             >
               上一级
@@ -273,7 +273,7 @@ onMounted(() => {
               v-if="prodoc.browsePath"
               variant="glass"
               shape="pill"
-              size="small"
+              :size="32"
               @click="pick(prodoc.browsePath as string)"
             >
               用这个目录
