@@ -546,6 +546,15 @@ fn is_side_segment(segment: &str) -> bool {
     matches!(rest.as_str(), "t" | "b" | "l" | "r" | "_")
 }
 
+/// `group` 值 → 组名（剥掉 `@ x, y, w, h` 的显式几何）。
+///
+/// 与渲染器的 `parseGroupEntry` 同义：几何是**区域画在哪**，组名是**谁和谁
+/// 一组**。检查只关心后者，所以把 `@` 之后整段丢掉（不校验几何语法——那是
+/// CLI 的 `multi-group` / 几何冲突两项，本模块刻意不覆盖）。
+fn group_name(raw: &str) -> Option<String> {
+    let name = raw.split('@').next().unwrap_or("").trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
 // ── 图与检查 ────────────────────────────────────────────────────────────
 
 /// 一篇文档的检查视图。
@@ -560,6 +569,8 @@ struct Doc {
     has_x: bool,
     has_y: bool,
     group_decls: usize,
+    /// 声明的分组名（列表只取第一个，与渲染器一致）；`None` = 不属于任何组。
+    group: Option<String>,
 }
 
 /// 跑一遍检查。
@@ -604,6 +615,13 @@ pub fn check(files: &BTreeMap<String, String>) -> Report {
             Some(_) => 1,
             None => 0,
         };
+        // 分组名：列表只取第一个（与渲染器的「仅取第一个并记录警告」一致），
+        // `@ x, y, w, h` 的显式几何剥掉——判据是「同一组」，与几何无关。
+        let group = match frame.params.get("group") {
+            Some(Param::List(items)) => items.first().and_then(Param::as_str).and_then(group_name),
+            Some(param) => param.as_str().and_then(group_name),
+            None => None,
+        };
         docs.push(Doc {
             id,
             title,
@@ -617,6 +635,7 @@ pub fn check(files: &BTreeMap<String, String>) -> Report {
             has_x: frame.params.get("x").and_then(Param::as_number).is_some(),
             has_y: frame.params.get("y").and_then(Param::as_number).is_some(),
             group_decls,
+            group,
         });
     }
 
@@ -674,7 +693,11 @@ pub fn check(files: &BTreeMap<String, String>) -> Report {
     }
 
     // 环：强连通分量里成员 > 1 即环（与 layout.ts 的判据一致）。
-    for component in strongly_connected(&docs, &relations) {
+    //
+    // 分量表顺手留给后面的层级深度用（`layer_depths` 也要先做 SCC 归约，
+    // 否则环会让"最长路径"无解）。
+    let components = strongly_connected(&docs, &relations);
+    for component in &components {
         if component.len() > 1 {
             report.issues.push(Issue {
                 level: Level::Warning,
@@ -690,9 +713,14 @@ pub fn check(files: &BTreeMap<String, String>) -> Report {
 
     // 连带：孤立判定要用到「作为端点出现过」。
     let mut linked: HashSet<&str> = HashSet::new();
+    // 入度：多父判定（`multi-parent`）。布局只给每个框留**一个**位置，被多个
+    // 父指向时它只能折中，于是每个父都会明显偏离子群中部——这是几何上的必然，
+    // 不是画得像不像的问题。
+    let mut indegree: HashMap<&str, usize> = HashMap::new();
     for (from, to) in &relations {
         linked.insert(from.as_str());
         linked.insert(to.as_str());
+        *indegree.entry(to.as_str()).or_default() += 1;
     }
 
     // 逐**框**检查，不是逐文件：重复 id 时后者覆盖前者（CLI 的
@@ -701,7 +729,11 @@ pub fn check(files: &BTreeMap<String, String>) -> Report {
     let mut boxes: Vec<&Doc> = by_id.values().copied().collect();
     boxes.sort_by(|a, b| a.doc_path.cmp(&b.doc_path));
 
-    for doc in boxes {
+    // 层级深度：与布局同一套（SCC 归约后的最长路径 + 1）。分组检查要用它，
+    // 且必须与画布一致——否则 warning 说的层号与用户看到的层号不是一回事。
+    let depths = layer_depths(&boxes, &relations, &components);
+
+    for doc in &boxes {
         if doc.body_empty {
             report.issues.push(Issue {
                 level: Level::Warning,
@@ -761,6 +793,59 @@ pub fn check(files: &BTreeMap<String, String>) -> Report {
                 rule: "multi-group",
                 message: format!("文档 \"{}\" 声明了多个 group，仅取第一个", doc.id),
                 file: Some(doc.doc_path.clone()),
+            });
+        }
+        if let Some(parents) = indegree.get(doc.id.as_str()).copied().filter(|n| *n > 1) {
+            report.issues.push(Issue {
+                level: Level::Warning,
+                rule: "multi-parent",
+                message: format!(
+                    "「{}」被 {} 篇文档连线指向：框只有一个位置，布局只能折中，\
+                     每个父都会偏离子群中部",
+                    doc.title, parents
+                ),
+                file: Some(doc.doc_path.clone()),
+            });
+        }
+    }
+
+    // 分组跨层（本模块额外规则，CLI 没有）：
+    //
+    // 组区域的几何是**成员包围盒 + 内边距**（渲染器 `computeGroupRegion`：
+    // `x-24, y-34, w+48, h+58`），它是在布局**之后**才算的——布局求解器并不
+    // 知道有组这回事（`computeLayeredLayout(boxes, relations)` 只吃这两样）。
+    // 于是「组框只包住本组」不是不变量，而是成员恰好聚在一起时的巧合。
+    //
+    // 跨 ≥2 层的组必然误伤：层带是整条水平带，组的 y 区间覆盖首末层之间的
+    // **每一层**，中间层的非成员框被一起框进去。跨度 1（一个父 + 它的直接子）
+    // 通常是干净的 T 形，不报。
+    let mut groups: BTreeMap<&str, Vec<&Doc>> = BTreeMap::new();
+    for doc in &boxes {
+        if let Some(name) = doc.group.as_deref() {
+            groups.entry(name).or_default().push(doc);
+        }
+    }
+    for (name, members) in groups {
+        let levels: Vec<usize> = members
+            .iter()
+            .map(|doc| depths.get(doc.id.as_str()).copied().unwrap_or(0))
+            .collect();
+        let lo = levels.iter().copied().min().unwrap_or(0);
+        let hi = levels.iter().copied().max().unwrap_or(0);
+        if hi.saturating_sub(lo) >= 2 {
+            report.issues.push(Issue {
+                level: Level::Warning,
+                rule: "group-scattered",
+                message: format!(
+                    "分组「{}」的 {} 篇文档跨越 {} 层（第 {}–{} 层）：组框会把中间层\
+                     的其它文档一起框进去，不同组的框也会互相重叠",
+                    name,
+                    members.len(),
+                    hi - lo + 1,
+                    lo,
+                    hi
+                ),
+                file: Some(members[0].doc_path.clone()),
             });
         }
     }
@@ -943,6 +1028,72 @@ fn strongly_connected(docs: &[Doc], relations: &BTreeSet<(String, String)>) -> V
     state.out
 }
 
+/// 每个框的层级深度：SCC 归约后的**最长路径** + 1（根为 0）。
+///
+/// 与布局同一套规则（`computeLayers`：先 Tarjan 归约，环上成员算同一节点）。
+/// 复刻的理由与整个 `check.rs` 相同——不能起 Node 进程；对齐的理由更具体：
+/// 这个数字要出现在给作者看的 warning 里，说错了（比如按最短路径算）他会去
+/// 数画布上的层，然后怀疑是工具坏了。
+fn layer_depths(
+    docs: &[&Doc],
+    relations: &BTreeSet<(String, String)>,
+    components: &[Vec<String>],
+) -> HashMap<String, usize> {
+    // 节点 → 分量下标。
+    let mut component_of: HashMap<&str, usize> = HashMap::new();
+    for (index, component) in components.iter().enumerate() {
+        for id in component {
+            component_of.insert(id.as_str(), index);
+        }
+    }
+
+    // 分量之间的有向边（自环丢弃：归约后它就是分量内部）。
+    let mut parents: Vec<HashSet<usize>> = vec![HashSet::new(); components.len()];
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); components.len()];
+    for (from, to) in relations {
+        let (Some(&a), Some(&b)) = (
+            component_of.get(from.as_str()),
+            component_of.get(to.as_str()),
+        ) else {
+            continue;
+        };
+        if a == b {
+            continue;
+        }
+        if parents[b].insert(a) {
+            children[a].push(b);
+        }
+    }
+
+    // DAG 上的最长路径：拓扑序（分量下标不保证拓扑序，用入度驱动）。
+    let mut depth = vec![0usize; components.len()];
+    let mut pending: Vec<usize> = parents.iter().map(HashSet::len).collect();
+    let mut queue: std::collections::VecDeque<usize> = pending
+        .iter()
+        .enumerate()
+        .filter(|(_, count)| **count == 0)
+        .map(|(index, _)| index)
+        .collect();
+    while let Some(node) = queue.pop_front() {
+        for &next in &children[node] {
+            depth[next] = depth[next].max(depth[node] + 1);
+            pending[next] -= 1;
+            if pending[next] == 0 {
+                queue.push_back(next);
+            }
+        }
+    }
+
+    let mut out: HashMap<String, usize> = HashMap::new();
+    for doc in docs {
+        let level = component_of
+            .get(doc.id.as_str())
+            .map(|index| depth[*index])
+            .unwrap_or(0);
+        out.insert(doc.id.clone(), level);
+    }
+    out
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1175,6 +1326,73 @@ mod tests {
         let report = check(&BTreeMap::new());
         assert!(report.has_errors());
         assert_eq!(rules(&report), vec!["no-documents"]);
+    }
+
+    /// 多父：被两篇以上文档指向时报告。框只有一个位置，布局只能折中。
+    #[test]
+    fn multi_parent_is_reported() {
+        let report = check(&files(&[
+            ("a.md", "---\nid: a\nlink: [c]\n---\n# A\n"),
+            ("b.md", "---\nid: b\nlink: [c]\n---\n# B\n"),
+            ("c.md", "---\nid: c\n---\n# C\n"),
+        ]));
+        let found = rules(&report);
+        assert!(found.contains(&"multi-parent"), "{found:?}");
+        // 单父不报。
+        let single = check(&files(&[
+            ("a.md", "---\nid: a\nlink: [b]\n---\n# A\n"),
+            ("b.md", "---\nid: b\n---\n# B\n"),
+        ]));
+        assert!(!rules(&single).contains(&"multi-parent"), "{:?}", single.issues);
+    }
+
+    /// 分组跨层：跨度 ≥2 才报。跨度 1（一个父 + 直接子）是干净的 T 形。
+    #[test]
+    fn group_scattered_needs_two_layer_span() {
+        // 链 a → b → c，三篇同组：跨第 0–2 层 → 报。
+        let scattered = check(&files(&[
+            ("a.md", "---\nid: a\ngroup: G\nlink: [b]\n---\n# A\n"),
+            ("b.md", "---\nid: b\ngroup: G\nlink: [c]\n---\n# B\n"),
+            ("c.md", "---\nid: c\ngroup: G\n---\n# C\n"),
+        ]));
+        assert!(rules(&scattered).contains(&"group-scattered"), "{:?}", scattered.issues);
+
+        // 父 + 两个直接子（同组）：只跨第 0–1 层 → 不报。
+        let tight = check(&files(&[
+            ("a.md", "---\nid: a\ngroup: G\nlink: [b, c]\n---\n# A\n"),
+            ("b.md", "---\nid: b\ngroup: G\n---\n# B\n"),
+            ("c.md", "---\nid: c\ngroup: G\n---\n# C\n"),
+        ]));
+        assert!(!rules(&tight).contains(&"group-scattered"), "{:?}", tight.issues);
+    }
+
+    /// 分组名里的显式几何（`G @ x, y, w, h`）不影响"同一组"的判定。
+    #[test]
+    fn group_name_strips_explicit_geometry() {
+        assert_eq!(group_name("G @ 0, 0, 100, 60").as_deref(), Some("G"));
+        assert_eq!(group_name("  前端  ").as_deref(), Some("前端"));
+        assert_eq!(group_name(" @ 1, 2, 3, 4"), None);
+        assert_eq!(group_name(""), None);
+
+        // 一个成员带几何、另一个不带，仍算同一组（跨度 1 → 不报）。
+        let report = check(&files(&[
+            ("a.md", "---\nid: a\ngroup: \"G @ 0, 0, 400, 300\"\nlink: [b]\n---\n# A\n"),
+            ("b.md", "---\nid: b\ngroup: G\n---\n# B\n"),
+        ]));
+        assert!(!rules(&report).contains(&"group-scattered"), "{:?}", report.issues);
+    }
+
+    /// 深度与布局同一套：环上成员算同一层，不因环把深度算成无穷。
+    #[test]
+    fn layer_depth_uses_scc_reduction() {
+        let report = check(&files(&[
+            ("a.md", "---\nid: a\nlink: [b]\n---\n# A\n"),
+            ("b.md", "---\nid: b\nlink: [a]\n---\n# B\n"),
+            ("c.md", "---\nid: c\nlink: [d]\n---\n# C\n"),
+        ]));
+        // a↔b 是一个环（同层），c 无入边（第 0 层），d 在第 1 层。不 panic 即可，
+        // 且环仍要被报出来。
+        assert!(rules(&report).contains(&"cycle"), "{:?}", report.issues);
     }
 
     /// 排序稳定：error 先于 warning 先于 info。

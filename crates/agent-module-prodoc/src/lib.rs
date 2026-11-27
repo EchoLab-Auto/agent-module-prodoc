@@ -444,38 +444,6 @@ pub fn module_with_state(version: &str) -> (Arc<dyn Module>, Arc<ModuleState>) {
     (built, state)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 缺省上限必须存在且彼此自洽：单文件上限不能大于总量上限，
-    /// 否则"允许单文件 100MB、总量 32MB"这种配置会让报错文案自相矛盾。
-    #[test]
-    fn default_caps_are_coherent() {
-        let config = Config::default();
-        assert!(config.max_file_bytes > 0);
-        assert!(config.max_file_bytes <= config.max_total_bytes);
-        assert!(config.max_files > 0);
-        assert!(config.roots.is_empty(), "缺省不放开任何显式根");
-    }
-
-    /// 配置里写错字段名要报错而不是静默忽略——静默忽略会让人以为
-    /// `max_file` 生效了。
-    #[test]
-    fn unknown_config_field_is_rejected() {
-        let error = serde_json::from_value::<Config>(json!({"max_file": 10}));
-        assert!(error.is_err());
-    }
-
-    /// 没有事件出口时 emit 不 panic（裸装配 / 单测场景）。
-    #[test]
-    fn emit_without_sink_is_silent() {
-        let state = ModuleState::default();
-        state.emit_error(Some("t"), "/docs", "boom");
-        state.emit_bundle(&bundle::Bundle::default());
-    }
-}
-
 /// 把 `skills/prodoc-format/SKILL.md` 交给技能模块登记（2026-11）。
 ///
 /// ## 为什么交给模块自己，而不是宿主的硬编码清单
@@ -547,4 +515,36 @@ fn register_skill(ctx: &echo_module::MountContext) -> Vec<echo_defs::Disposer> {
     vec![echo_defs::Disposer::from_fn(move || {
         registrar.unregister(MODULE_ID);
     })]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 缺省上限必须存在且彼此自洽：单文件上限不能大于总量上限，
+    /// 否则"允许单文件 100MB、总量 32MB"这种配置会让报错文案自相矛盾。
+    #[test]
+    fn default_caps_are_coherent() {
+        let config = Config::default();
+        assert!(config.max_file_bytes > 0);
+        assert!(config.max_file_bytes <= config.max_total_bytes);
+        assert!(config.max_files > 0);
+        assert!(config.roots.is_empty(), "缺省不放开任何显式根");
+    }
+
+    /// 配置里写错字段名要报错而不是静默忽略——静默忽略会让人以为
+    /// `max_file` 生效了。
+    #[test]
+    fn unknown_config_field_is_rejected() {
+        let error = serde_json::from_value::<Config>(json!({"max_file": 10}));
+        assert!(error.is_err());
+    }
+
+    /// 没有事件出口时 emit 不 panic（裸装配 / 单测场景）。
+    #[test]
+    fn emit_without_sink_is_silent() {
+        let state = ModuleState::default();
+        state.emit_error(Some("t"), "/docs", "boom");
+        state.emit_bundle(&bundle::Bundle::default());
+    }
 }

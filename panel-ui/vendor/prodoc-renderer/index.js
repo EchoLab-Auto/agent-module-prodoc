@@ -2031,6 +2031,29 @@ var gt = { class: "pd-graph-viewer" }, _t = { class: "pd-graph-header" }, vt = {
 					...Me(r)
 				};
 			});
+		}), looseGroups = t(() => {
+			// 组框会不会「误伤」（本地补丁 2026-11-group-loose）。
+			//
+			// 组区域 = 成员包围盒 + 内边距（`Me`），而这个矩形是**布局之后**才算的
+			// ——布局求解器 `b(boxes, relations)` 根本不知道有组，所以「只框住成员」
+			// 不是不变量，只是成员恰好聚在一起时的巧合。跨两层的组必然盖住中间层。
+			//
+			// 判据取「非成员框的**中心**落在组区域内」：内边距只有 24/34px，用矩形
+			// 相交会把紧贴的邻居全算成侵入（那样几乎每组都要降级）。
+			let out = /* @__PURE__ */ new Set();
+			if (V.value.size > 0) return out; // 折叠态：组成员不渲染，画布上不存在交错
+			for (let g of fr.value) {
+				let members = new Set(g.members ?? []);
+				for (let box of K.value) {
+					if (members.has(box.id)) continue;
+					let cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+					if (cx >= g.x && cx <= g.x + g.w && cy >= g.y && cy <= g.y + g.h) {
+						out.add(g.name);
+						break;
+					}
+				}
+			}
+			return out;
 		}), pr = (e) => W.value !== null && !e.members.some((e) => tr.value.has(e));
 		function mr() {
 			if (G.value) {
@@ -3197,7 +3220,7 @@ var gt = { class: "pd-graph-viewer" }, _t = { class: "pd-graph-header" }, vt = {
 				}, [
 					(h(!0), i(e, null, _(lr.value, (e) => (h(), i("div", {
 						key: "group-" + e.name,
-						class: d(["pd-doc-group", { "pd-dim": pr(e) }]),
+						class: d(["pd-doc-group", { "pd-dim": pr(e), "pd-doc-group--loose": looseGroups.value.has(e.name) }]),
 						style: f({
 							left: `${e.x}px`,
 							top: `${e.y}px`,

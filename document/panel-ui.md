@@ -59,9 +59,6 @@ group: 交付
 `vendor/` 是构建产物，给它们打的补丁记在 `vendor/patches/`（每处含症状、原因与升级时如何
 重放）。**升级覆盖 dist 之前先读那份 README**，否则补丁会静默丢失。
 
-`tests/vendor-patches.test.ts` 是这些补丁的守卫：每条补丁留一条文本断言，覆盖 dist 后
-`npm test` 直接红——否则失效方式是静默的（画布照旧能打开，只是手感退回上游默认）。
-
 ## 画布平移的手感
 
 当前有两处本地补丁（细节见 `vendor/patches/README.md`）：
@@ -77,6 +74,20 @@ group: 交付
 渲染器的视口矩形（虚拟化裁剪用）读的是 `getView().panX/panY`，非无限模式下这两个恒为 0，
 所以「受控平移」这条同时修掉了大文档群（> 40 框）滚到别处后框被裁掉的隐患。
 
+## 组框会误伤时降级
+
+组区域的几何 = 成员包围盒 + 内边距，而它是布局**之后**才算的——布局求解器
+（`computeLayeredLayout(boxes, relations)`）根本不知道有组。因此「只框住成员」不是不变量：
+跨 ≥2 层的组，其 y 区间必然覆盖中间整条层带。
+
+渲染器按「不说假话」处理：检测到组区域里有**非成员框的中心点**时，不画虚线矩形，降级为
+组名 chip（折叠入口保留、尺寸手柄隐藏）。判据用中心点而不是矩形相交——内边距只有
+24/34px，相交会把紧贴的一圈邻居全算成侵入，几乎每组都要降级。折叠态不降级（成员不渲染，
+画布上不存在交错）。
+
+作者侧的对策是 `check` 的 `group-scattered` 规则，见 [文档图检查](./check.md)；格式规范
+（技能 `prodoc-format` §4.5）把判据写成「组只用在『一个父 + 全部直接子』上」。
+
 ## 构建与测试
 
 在 `panel-ui/` 目录里自己构建与测试（扩展不再是面板构建的一部分，运行期由 Panel 按
@@ -90,6 +101,10 @@ npm test         # vitest，配置见 panel-ui/vitest.config.ts（纯函数层�
 
 `panel-extension.json` 只声明 `id` 与入口（`index.ts`）；产物落在 `panel-ui/dist/`，由部署
 脚本复制到 Panel 静态目录的 `panel-extensions/echo-agent.prodoc/`。
+
+`npm test` 里有一组 `tests/vendor-patches.test.ts`：它读 `vendor/` 的产物文本、逐条断言
+三份补丁还在。升级 vendor 覆盖 dist 后这三条会直接红——否则失效方式是静默的（画布照旧能
+打开，只是行为退回上游默认）。
 
 ## 事件消费不能看长度
 
