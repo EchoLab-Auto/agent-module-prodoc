@@ -59,6 +59,24 @@ group: 交付
 `vendor/` 是构建产物，给它们打的补丁记在 `vendor/patches/`（每处含症状、原因与升级时如何
 重放）。**升级覆盖 dist 之前先读那份 README**，否则补丁会静默丢失。
 
+`tests/vendor-patches.test.ts` 是这些补丁的守卫：每条补丁留一条文本断言，覆盖 dist 后
+`npm test` 直接红——否则失效方式是静默的（画布照旧能打开，只是手感退回上游默认）。
+
+## 画布平移的手感
+
+当前有两处本地补丁（细节见 `vendor/patches/README.md`）：
+
+- **受控平移**：渲染器原本给画布传 `infinite: ""`，而 `resolveProp` 语义是
+  `props ?? 配置 ?? 缺省`——空串不回落到缺省，`Boolean("")` 为 false，画布实际走原生
+  `scrollLeft`。原生滚动带系统阻尼/加速曲线（慢速移动位移很小），且 ui-frame 对
+  `pointerType === "touch"` 在非无限模式下直接不启动拖拽——触屏拖不动。改成布尔 `true`
+  后是逐事件 1:1 的 `translate(panX, panY)`。
+- **滚轮倍率**：stage 自己做 `onWheel`（冒泡到 viewport 之前拦下），按 1.5 倍调
+  `panBy`；`Ctrl`/`Meta` 放行给缩放，`textarea`/`input`/`.pd-doc-view` 放行给原生滚动。
+
+渲染器的视口矩形（虚拟化裁剪用）读的是 `getView().panX/panY`，非无限模式下这两个恒为 0，
+所以「受控平移」这条同时修掉了大文档群（> 40 框）滚到别处后框被裁掉的隐患。
+
 ## 构建与测试
 
 在 `panel-ui/` 目录里自己构建与测试（扩展不再是面板构建的一部分，运行期由 Panel 按

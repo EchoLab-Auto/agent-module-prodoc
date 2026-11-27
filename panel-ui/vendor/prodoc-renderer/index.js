@@ -3161,7 +3161,7 @@ var gt = { class: "pd-graph-viewer" }, _t = { class: "pd-graph-header" }, vt = {
 				"show-grid": "",
 				"grid-variant": "dots",
 				"show-fit": "",
-				infinite: "",
+				infinite: !0,
 				"content-bounds": Zn.value,
 				"min-zoom": .25,
 				"max-zoom": 3
@@ -3180,6 +3180,17 @@ var gt = { class: "pd-graph-viewer" }, _t = { class: "pd-graph-header" }, vt = {
 						height: `${Xn.value.h}px`
 					}),
 					onPointerdown: ui,
+					onWheel: u[27] ||= (e) => {
+						// 平移手感（本地补丁 2026-11-pan-feel）：Ctrl/Meta 滚轮是缩放，交回 canvas。
+						if (e.ctrlKey || e.metaKey) return;
+						let c = Yn.value;
+						if (!c || typeof c.panBy !== "function") return;
+						let t = e.target;
+						if (t && t.closest && t.closest("textarea, input, .pd-doc-view, .pd-search-body")) return;
+						e.preventDefault(), e.stopPropagation();
+						let n = e.deltaMode === 1 ? 16 : 1;
+						c.panBy(-e.deltaX * n * 1.5, -e.deltaY * n * 1.5);
+					},
 					onClick: u[10] ||= (e) => {
 						Z.value = null, qr.value = null;
 					}

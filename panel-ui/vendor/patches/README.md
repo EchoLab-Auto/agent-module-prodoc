@@ -38,3 +38,47 @@ vendor 时静默丢失。
 热更新，渲染器假定有这个行为）。清空覆盖表会让画布立刻跳回旧坐标，看起来像
 保存失败，所以保留覆盖表、用「✓ 布局已保存」表达状态；下一次重开文档群或刷新
 页面时，坐标从文件读出，覆盖表由 `watch(() => props.files)` 自动修剪。
+
+## `2026-11-pan-feel.patch` — 画布平移的手感
+
+**症状**：文档图画布「滑动太慢 / 拖不动」——滚轮推一下走得很少，触摸屏与
+触控板用手指拖根本不动。
+
+**原因**：渲染器给 `NeumorphismCanvas` 传的是 `infinite: ""`。ui-frame 的
+`resolveProp` 语义是 `props ?? 主题配置 ?? 缺省`，空字符串**不是** `null` /
+`undefined`，所以不会回落到缺省值——`Boolean("") === false`，画布实际处于
+**非** 无限画布模式：
+
+- 平移走 viewport 的原生 `scrollLeft/scrollTop`，带操作系统级的滚动阻尼/加速
+  曲线（慢速移动时位移很小），而不是逐事件 1:1 的受控平移；
+- ui-frame 的拖拽启动条件里有一条 `pointerType === "touch" && !infinite` 直接
+  return——触屏拖动完全无效，只剩原生滚动；
+- 渲染器自己的 `Ze` 视口状态从 `getView().panX/panY` 取值，非无限模式下这两个
+  恒为 0，于是「视口矩形」永远算在左上角。文档群超过 40 个框时（`ut` 开启虚拟
+  化）滚到别处，框会被当作视口外而不渲染——大图上表现为「框莫名消失」。
+
+**补丁内容**（`vendor/prodoc-renderer/index.js`，两处）：
+
+1. `infinite: ""` → `infinite: !0`。画布进入受控平移：`content` 用
+   `translate(panX, panY) scale(zoom)`，拖动与滚轮都是逐事件 1:1；触屏拖动同时
+   恢复正常（`--infinite` 类还带来 `touch-action: none`）。fit 按钮走
+   `contentBounds` 分支，渲染器本来就传了 `content-bounds`，无需额外改动。
+2. stage 上新增 `onWheel`（`u[27]` 缓存）：在事件冒泡到 viewport 之前
+   `preventDefault + stopPropagation`，自己按 **1.5 倍**调
+   `canvasRef.panBy(-deltaX*k, -deltaY*k)`。为什么不用 canvas 内建的滚轮平移：
+   它固定在 1:1，用户实测偏慢，而倍率只能在我们自己这层定。
+
+   三个必须保留的细节：
+   - `Ctrl` / `Meta` 按下时**直接 return**（那是缩放，拦掉就再也缩放不了）；
+   - `textarea` / `input` / `.pd-doc-view` / `.pd-search-body` 内部的滚轮放行
+     （那些区域要自己的原生滚动）；
+   - `deltaMode === 1 ? 16 : 1`：行模式滚轮（Firefox）要换算成像素。
+
+**已知残留**：`panBy` 只在 `infinite` 生效。这两处改动是配套的——只改倍率不改
+`infinite` 会变成「滚轮被拦下来但画布不动」，比原来更糟。`tests/vendor-patches.test.ts`
+把这条关系钉住了。
+
+**调手感**：慢就改 `c.panBy(... * 1.5)` 里的 `1.5`，快就往下调。改完必须跑
+`npm test`（断言里粘了这个字面量，忘了同步会红）。
+
+**为什么不直接换上游新构建**：同上一节结论（vendored 的是更晚的版本，缺功能）。
