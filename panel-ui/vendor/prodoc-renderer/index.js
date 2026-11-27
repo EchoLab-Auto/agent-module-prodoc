@@ -1500,9 +1500,10 @@ var gt = { class: "pd-graph-viewer" }, _t = { class: "pd-graph-header" }, vt = {
 		plugins: {},
 		edgeRouter: {},
 		nodeRenderers: {},
-		collapsedGroups: {}
+		collapsedGroups: {},
+		maxDepth: {}
 	},
-	emits: ["navigate", "save"],
+	emits: ["navigate", "save", "depth-pick"],
 	setup(c, { emit: se }) {
 		let O = c, le = se, fe = g(null), { theme: pe } = D();
 		function j(e, t = "info", n = 4e3) {
@@ -1635,7 +1636,7 @@ var gt = { class: "pd-graph-viewer" }, _t = { class: "pd-graph-header" }, vt = {
 		let ze = t(() => M.value.size ? {
 			...O.files,
 			...Object.fromEntries(M.value)
-		} : O.files), Be = t(() => nt(O.plugins)), He = t(() => O.edgeRouter ? $e(O.edgeRouter) : Be.value.edgeRouter ?? $e("bezier")), z = t(() => {
+		} : O.files), Be = t(() => nt(O.plugins)), He = t(() => O.edgeRouter ? $e(O.edgeRouter) : Be.value.edgeRouter ?? $e("bezier")), zRaw = t(() => {
 			let e = Ve(ze.value), t = Be.value, n = t.warnings;
 			if (n.length === 0 && t.nodeTypes.size === 0) return e;
 			let r = it(e.boxes, t.nodeTypes, {
@@ -1646,6 +1647,37 @@ var gt = { class: "pd-graph-viewer" }, _t = { class: "pd-graph-header" }, vt = {
 				...e,
 				boxes: r,
 				warnings: [...e.warnings, ...n]
+			};
+		}), z = t(() => {
+			// 深度窗口（本地补丁 2026-11-depth-window）。
+			//
+			// 布局只对**留下来的**框算（过滤发生在 `Ve` 之后、`ct` 折叠之前），
+			// 所以隐藏深层等于真的少算节点，图会重新紧凑——不是把框藏起来留空洞。
+			// `depth` 由 `Ve` 按 SCC 归约后的最长路径算好，与「层级」含义一致。
+			let e = zRaw.value, limit = O.maxDepth;
+			if (!limit || !Number.isFinite(limit) || limit <= 0) return e;
+			let keep = /* @__PURE__ */ new Set();
+			for (let box of e.boxes) if ((box.depth ?? 0) < limit) keep.add(box.id);
+			if (keep.size === 0 || keep.size === e.boxes.length) return e;
+			// 被藏起来的那一支还剩几篇：可见框上显示「+N」。
+			// 少了这个角标，用户把层级调低后只看到图变小，不知道下面是"没有"
+			// 还是"没显示"——那正是折叠式浏览最容易让人迷路的地方。
+			let hiddenTail = /* @__PURE__ */ new Map();
+			for (let r of e.relations) {
+				if (keep.has(r.from) && !keep.has(r.to))
+					hiddenTail.set(r.from, (hiddenTail.get(r.from) ?? 0) + 1);
+			}
+			return {
+				...e,
+				hiddenTail,
+				boxes: e.boxes.filter((box) => keep.has(box.id)),
+				relations: e.relations.filter((r) => keep.has(r.from) && keep.has(r.to)),
+				// 成员被隐藏的组：**保留**显式几何（作者手写的区域），非显式的
+				// 由 `fr` 按剩余成员重算。
+				groups: e.groups.map((g) => ({
+					...g,
+					members: g.members.filter((m) => keep.has(m))
+				})).filter((g) => g.members.length > 0)
 			};
 		}), B = (e) => e.nodeType ?? "doc", We = (e) => at(B(e), Be.value.nodeTypes), Ge = (e) => O.nodeRenderers?.[B(e)], V = g(new Set(O.collapsedGroups ?? [])), Ke = t(() => ct({
 			boxes: z.value.boxes,
@@ -1983,6 +2015,35 @@ var gt = { class: "pd-graph-viewer" }, _t = { class: "pd-graph-header" }, vt = {
 				};
 			});
 			return [...t, ...n];
+		}), layerBands = t(() => {
+			// 层带（本地补丁 2026-11-depth-window）：把「第几层」画出来。
+			//
+			// 分层布局本身没有视觉边界——用户看到的是散落的框，看不出「这几篇
+			// 同层、从这条线往下是子文档」。层带 = 每层一条淡背景 + 左侧层号，
+			// 由**布局后的** `K` 反推 y 区间（不是重新算布局，避免两处口径分叉）。
+			let bands = /* @__PURE__ */ new Map();
+			for (let box of K.value) {
+				if (box.attrs && box.attrs.type === "group") continue;
+				let depth = typeof box.depth === "number" ? box.depth : 0;
+				let top = box.y, bottom = box.y + box.h;
+				let cur = bands.get(depth);
+				if (!cur) bands.set(depth, {
+					top,
+					bottom,
+					count: 1
+				});
+				else {
+					cur.top = Math.min(cur.top, top);
+					cur.bottom = Math.max(cur.bottom, bottom);
+					cur.count += 1;
+				}
+			}
+			return [...bands.entries()].sort((a, b) => a[0] - b[0]).map(([depth, v]) => ({
+				depth,
+				y: v.top,
+				h: Math.max(v.bottom - v.top, 1),
+				count: v.count
+			}));
 		}), or = t(() => Ke.value.groupNodes.map((e) => {
 			let t = G.value?.get(e.id);
 			return t ? {
@@ -2908,6 +2969,9 @@ var gt = { class: "pd-graph-viewer" }, _t = { class: "pd-graph-header" }, vt = {
 			}
 			Xi.value = !1, U.value = t && O.files[t] ? t : null;
 		}
+		function hiddenTails(id) {
+			return z.value.hiddenTail?.get(id) ?? 0;
+		}
 		function Gi(e) {
 			if (O.files[e]) {
 				if (U.value === e) {
@@ -3218,6 +3282,21 @@ var gt = { class: "pd-graph-viewer" }, _t = { class: "pd-graph-header" }, vt = {
 						Z.value = null, qr.value = null;
 					}
 				}, [
+					(h(!0), i(e, null, _(layerBands.value, (b) => (h(), i("div", {
+						key: "layer-" + b.depth,
+						class: "pd-layer-band",
+						style: f({
+							top: `${b.y}px`,
+							height: `${b.h}px`,
+							width: `${Xn.value.w}px`
+						})
+					}, [a("button", {
+						type: "button",
+						class: "pd-layer-band__label",
+						"data-nm-no-pan": "",
+						title: `只显示到第 ${b.depth} 层（${b.count} 篇）`,
+						onClick: C((e) => se("depth-pick", b.depth + 1), ["stop"])
+					}, "L" + b.depth + " · " + b.count, 1)]))), 128)),
 					(h(!0), i(e, null, _(lr.value, (e) => (h(), i("div", {
 						key: "group-" + e.name,
 						class: d(["pd-doc-group", { "pd-dim": pr(e), "pd-doc-group--loose": looseGroups.value.has(e.name) }]),
@@ -3375,6 +3454,11 @@ var gt = { class: "pd-graph-viewer" }, _t = { class: "pd-graph-header" }, vt = {
 								title: t.title
 							}, v(t.title), 9, Ht),
 							We(t) ? (h(), i("span", Ut, v(We(t)), 1)) : r("", !0),
+							hiddenTails(t.id) ? (h(), i("span", {
+								key: 1,
+								class: "pd-doc-box__tail",
+								title: `还有 ${hiddenTails(t.id)} 篇子文档未显示（调高「层级」可见）`
+							}, "+" + v(hiddenTails(t.id)), 9, Gt)) : r("", !0),
 							u[23] ||= a("span", {
 								class: "pd-doc-box__icon",
 								"aria-hidden": "true"

@@ -65,6 +65,53 @@ const currentRoot = computed(() => activeRoot(core.value));
 const report = computed(() => activeReport(props.teamId, core.value));
 /** 检查面板是否展开（有错误时默认展开——那是用户最想看的）。 */
 const reportOpen = ref(false);
+
+/**
+ * 层级窗口：只画到第 N 层（`all` = 全部）。
+ *
+ * 为什么需要它：分层布局把「深度」算得很准，但一个 68 篇、7 层的文档群铺开来
+ * 是 8000+ px 宽——**看得出细节，看不出骨架**。收窄到前两层先给结构，需要时再
+ * 往上调，是从粗到细读一张图的自然方式。
+ *
+ * 存在 localStorage 里而不是后端：这是每台设备各自的阅读习惯，跟着 Core 走反而怪。
+ */
+const DEPTH_KEY = 'prodoc.depth-mode';
+const DEPTH_MODES = ['all', '2', '3', '4', '6'];
+
+function loadDepthMode(): string {
+  try {
+    const raw = localStorage.getItem(DEPTH_KEY);
+    return raw && DEPTH_MODES.includes(raw) ? raw : 'all';
+  } catch {
+    return 'all';
+  }
+}
+
+const depthMode = ref(loadDepthMode());
+const maxDepth = computed(() => (depthMode.value === 'all' ? null : Number(depthMode.value)));
+
+/**
+ * 下拉选项：固定几档 + **当前值**。
+ *
+ * 带上当前值是因为层带标签可直接点（点「L3」= 只看前 4 层），那个数字不一定
+ * 落在固定档位里——不在的话 `<select>` 会显示空白，看起来像坏了。
+ */
+const depthOptions = computed(() => {
+  const fixed = depthMode.value === 'all' ? [] : [Number(depthMode.value)];
+  return [...new Set([...fixed, 2, 3, 4, 6].filter((n) => Number.isFinite(n)))].sort((a, b) => a - b);
+});
+
+/** 点层带：只显示到该层（`limit` 是「层数」，等于 depth+1）。 */
+function pickDepth(limit: number): void {
+  depthMode.value = String(limit);
+}
+watch(depthMode, (next) => {
+  try {
+    localStorage.setItem(DEPTH_KEY, next);
+  } catch {
+    // 隐私模式 / 存储被禁用：不影响本次会话。
+  }
+});
 watch(
   () => report.value?.issues?.length ?? 0,
   (count, previous) => {
@@ -149,6 +196,13 @@ onMounted(() => {
           <span class="prodoc-summary">{{ summary }}</span>
         </div>
         <div class="prodoc-bar-actions">
+          <label class="prodoc-depth" title="只画到第 N 层：大图先看骨架，需要时再逐层展开">
+            <span class="prodoc-depth-label">层级</span>
+            <select v-model="depthMode">
+              <option value="all">全部</option>
+              <option v-for="opt in depthOptions" :key="opt" :value="String(opt)">前 {{ opt }} 层</option>
+            </select>
+          </label>
           <NeumorphismButton
             variant="glass"
             shape="pill"
@@ -222,6 +276,8 @@ onMounted(() => {
         <DocGraphViewer
           :key="`${core ?? ''}|${prodoc.root ?? ''}`"
           :files="entry.files"
+          :max-depth="maxDepth"
+          @depth-pick="pickDepth"
           :save-handler="handleSave"
           :delete-handler="handleDelete"
         />
@@ -364,12 +420,40 @@ onMounted(() => {
 .prodoc-summary {
   font-size: 12px;
   opacity: 0.68;
-  white-space: nowrap;
-}
-
 .prodoc-bar-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+/* 层级选择器：与胶囊按钮同高，原生 select 去掉默认外观 */
+.prodoc-depth {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  height: 32px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--nm-text-secondary, #666);
+  box-shadow: inset 2px 2px 4px var(--nm-shadow-dark, rgba(0, 0, 0, 0.12)),
+    inset -2px -2px 4px var(--nm-shadow-light, rgba(255, 255, 255, 0.7));
+}
+
+.prodoc-depth-label {
+  opacity: 0.7;
+}
+
+.prodoc-depth select {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0 2px;
+  cursor: pointer;
+  outline: none;
+}
 }
 
 .prodoc-error {

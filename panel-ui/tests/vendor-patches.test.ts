@@ -68,3 +68,33 @@ describe('补丁 2026-11-group-loose（组框误伤时降级）', () => {
     expect(css).toContain('.pd-doc-group--loose .pd-doc-group__resize{display:none}');
   });
 });
+describe('补丁 2026-11-depth-window（层带 + 层级窗口）', () => {
+  it('组件接受 maxDepth，且缺省（不传）时不过滤', () => {
+    expect(renderer).toContain('maxDepth: {}');
+    // 判定必须是「假值就放行」：面板默认不传 → 完整图，与旧行为一致。
+    expect(renderer).toContain('if (!limit || !Number.isFinite(limit) || limit <= 0) return e;');
+  });
+
+  it('过滤发生在折叠（ct）之前：布局真的少算节点，不是藏起来留空洞', () => {
+    const depth = renderer.indexOf('hiddenTail');
+    const collapse = renderer.indexOf('Ke = t(() => ct({');
+    expect(depth).toBeGreaterThan(0);
+    expect(collapse).toBeGreaterThan(depth);
+  });
+
+  it('可见框上标出被藏起来的子节点数（+N）', () => {
+    expect(renderer).toContain('hiddenTails(t.id) ?');
+    expect(css).toContain('.pd-doc-box__tail{');
+  });
+
+  it('层带由布局后的 K 反推，并排除折叠出来的组超节点', () => {
+    expect(renderer).toContain('layerBands = t(() =>');
+    expect(renderer).toContain('if (box.attrs && box.attrs.type === "group") continue;');
+    expect(css).toContain('.pd-layer-band{');
+  });
+
+  it('层带标签可点击：把窗口收到该层（depth+1）', () => {
+    expect(renderer).toContain('emits: ["navigate", "save", "depth-pick"],');
+    expect(renderer).toContain('se("depth-pick", b.depth + 1)');
+  });
+});

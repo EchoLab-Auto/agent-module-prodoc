@@ -2,3 +2,10 @@
 /*$vite$:1*/
 /* 补丁 2026-11-group-loose：组区域会误伤（包围盒里有非成员框）时，不画虚线矩形，只留组名 chip——交错消失，折叠入口保留。 */
 .pd-doc-group--loose{border-color:transparent;background:none;pointer-events:none}.pd-doc-group--loose .pd-doc-group__label{pointer-events:auto;opacity:.9}.pd-doc-group--loose .pd-doc-group__resize{display:none}
+/* 补丁 2026-11-depth-window：层带 = 每层一条淡背景 + 左侧层号。
+   没有它，分层布局在视觉上是一堆散落的框——看不出谁和谁同层、往下是第几层。 */
+.pd-layer-band{position:absolute;left:0;pointer-events:none;z-index:0;background:color-mix(in srgb, var(--nm-text-secondary,#666) 4%, transparent);border-radius:14px}
+.pd-layer-band__label{position:absolute;left:10px;top:8px;padding:1px 6px;border:none;border-radius:8px;background:transparent;font:inherit;font-size:11px;letter-spacing:.04em;text-align:left;color:var(--nm-text-secondary,#666);opacity:.55;cursor:pointer;white-space:nowrap}
+.pd-layer-band__label:hover{opacity:1;background:color-mix(in srgb, var(--nm-text-secondary,#666) 12%, transparent)}
+/* 补丁 2026-11-depth-window：可见框上标出「还有 N 篇子文档被层级藏起」。 */
+.pd-doc-box__tail{position:absolute;right:8px;bottom:6px;padding:0 6px;border-radius:8px;font-size:11px;line-height:16px;color:var(--nm-primary-color,#cdfa4e);background:color-mix(in srgb, var(--nm-primary-color,#cdfa4e) 18%, transparent);pointer-events:none}
