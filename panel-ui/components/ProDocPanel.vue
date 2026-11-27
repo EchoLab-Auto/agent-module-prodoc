@@ -39,7 +39,7 @@ import NeumorphismButton from '@echolab-auto/ui-frame/components/NeumorphismButt
 import PanelIcon from '@echo-agent/panel/components/PanelIcon';
 import { DocGraphViewer } from '../vendor/prodoc-renderer/index.js';
 import '../vendor/prodoc-renderer/index.css';
-import { activeEntry, activeReport, activeRoot, browse, check, openRoot, prodoc, refresh, requestRoots } from '../index';
+import { activeEntry, activeReport, activeRoot, browse, check, closeRoot, openRoot, prodoc, refresh, requestRoots } from '../index';
 import { breadcrumbs, describeBundle, parentPath } from '../prodoc';
 import { deleteFile, saveFile } from '../write';
 
@@ -114,9 +114,16 @@ function enter(path: string): void {
   browse(core.value, path);
 }
 
+/**
+ * 换目录：退到选择界面。
+ *
+ * 走 `closeRoot`（而不是自己写 `prodoc.root = null`）——它同时清掉 localStorage
+ * 里「上次打开的根」的记忆。只清内存的话，下一次 `prodoc.roots` 事件（切视图
+ * 重挂载 / 断线重连 / 手点刷新都会产生）会用那份记忆把用户弹回原目录，
+ * 表现就是「点了换目录，一闪又回到刚才那个文档群」。
+ */
 function back(): void {
-  prodoc.root = null;
-  browse(core.value, null);
+  closeRoot(props.teamId, core.value);
 }
 
 onMounted(() => {
@@ -208,7 +215,12 @@ onMounted(() => {
       </div>
 
       <div v-else-if="!entry.error" class="prodoc-canvas">
+        <!-- `:key` 按「core + 根」重建实例：渲染器内部有一份**按相对路径**
+             存的编辑缓存（`{...files, ...本地编辑}`），换根不重建的话，新根的
+             `index.md` 会被旧根同名文件的编辑内容覆盖——画布上出现的是上一个
+             目录的文字。 -->
         <DocGraphViewer
+          :key="`${core ?? ''}|${prodoc.root ?? ''}`"
           :files="entry.files"
           :save-handler="handleSave"
           :delete-handler="handleDelete"
@@ -216,7 +228,6 @@ onMounted(() => {
       </div>
     </template>
 
-    <!-- ── 未打开：选目录 ─────────────────────────────────────── -->
     <template v-else>
       <section class="prodoc-picker">
         <!-- ① 发现的文档群：自动识别结果（模块在发现范围里找带 `prodoc: true` 的目录） -->

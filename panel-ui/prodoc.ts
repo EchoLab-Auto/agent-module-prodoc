@@ -168,9 +168,16 @@ export function collectProDocEvents(events: readonly ModuleEventLike[]): {
   reports: ProDocReportEvent[];
 } {
   const bundles: ProDocBundleEvent[] = [];
-  const seenBundleKeys = new Set<string>();
   const errors: ProDocErrorEvent[] = [];
-  const seenErrorKeys = new Set<string>();
+  /**
+   * 已经被**更新**事件占用的 `core|team|root`。
+   *
+   * 快照与失败**共用**这一个集合（而不是各记各的）：同一个根的最新状态只有
+   * 一种——要么是快照，要么是失败。分开记会让"先失败、后成功"的根同时带着
+   * 一条历史错误，而消费方先应用快照、再应用错误，最后画布上是那条早已过期的
+   * 错误条（用户看到的是"目录打不开"，实际它刚刚打开成功）。
+   */
+  const seenStateKeys = new Set<string>();
   let roots: ProDocRootsEvent | null = null;
   let dirs: ProDocDirsEvent | null = null;
   const acks: WriteAckEvent[] = [];
@@ -178,7 +185,7 @@ export function collectProDocEvents(events: readonly ModuleEventLike[]): {
   const seenReportKeys = new Set<string>();
 
   // 事件数组是「新的在前」（state.ts 用 unshift + slice）。所以：
-  // - 同一个 root 的多份快照，**第一条**（最新）才是要用的；
+  // - 同一个 root 的**第一条**（最新）状态才是要用的；
   // - 根列表 / 目录层同理取第一条。
   for (const event of events) {
     if (event.module !== 'echo-agent.prodoc') continue;
@@ -188,8 +195,8 @@ export function collectProDocEvents(events: readonly ModuleEventLike[]): {
         const bundle = normalizeBundle(payload, event.core ?? '');
         if (!bundle) break;
         const key = bundleKeyOf(bundle);
-        if (seenBundleKeys.has(key)) break;
-        seenBundleKeys.add(key);
+        if (seenStateKeys.has(key)) break;
+        seenStateKeys.add(key);
         bundles.push(bundle);
         break;
       }
@@ -197,8 +204,8 @@ export function collectProDocEvents(events: readonly ModuleEventLike[]): {
         const error = normalizeError(payload, event.core ?? '');
         if (!error) break;
         const key = bundleKeyOf(error);
-        if (seenErrorKeys.has(key)) break;
-        seenErrorKeys.add(key);
+        if (seenStateKeys.has(key)) break;
+        seenStateKeys.add(key);
         errors.push(error);
         break;
       }

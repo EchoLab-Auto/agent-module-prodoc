@@ -14,15 +14,15 @@ PANEL_UI_EXTENSIONS="/path/to/crate-workspace/panel-ui:/path/to/agent-module-pro
 装好后 `~/.local/state/echo-agent-panel/ui-extensions` 会记住这份清单，后续更新自动沿用。
 
 ## 构建与测试
+## 构建与测试
 
-从 Panel 的 `web/` 目录：
+扩展自己出产物（固定名 `dist/index.js`，面板运行期按 Core 登记的路径 `import()`）：
 
 ```bash
-PANEL_UI_EXTENSIONS=/abs/path/to/agent-module-prodoc/panel-ui npm run build
-PANEL_UI_EXTENSIONS=/abs/path/to/agent-module-prodoc/panel-ui npm test
+cd panel-ui
+npx vite build   # 产物在 dist/
+npm test         # 配置见 vitest.config.ts（只跑 tests/，纯函数层不需要 DOM）
 ```
-
-## 数据流
 
 ```text
 扩展 sendCommand(RequestProDocBundle)

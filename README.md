@@ -10,8 +10,10 @@ ProDoc 文档群模块（EchoAgent 模块，**独立仓库交付**）。
 把一个 Markdown 目录读成 **ProDoc 文档图**所需的 `相对路径 → 全文` 映射，交给 Panel
 的文档画布（`DocGraphViewer`）渲染。布局、边路由、搜索、编辑在浏览器里，**读盘在
 Core**——Panel 是独立进程，没有文件系统权限模型，也不该为了看个文档去开文件接口。
+用文件接口。
 
-## 能力
+模块自身的文档在 [`document/`](document/index.md)——prodoc 格式的文档群，可用面板「文档」入口
+打开（或在 CLI 里 `echo-prodoc view ./document`）。
 
 | 命令 | 语义 | 只读 |
 |---|---|---|

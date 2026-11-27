@@ -164,6 +164,29 @@ describe('collectProDocEvents', () => {
     expect(errors[0].error).toBe('不在允许范围');
   });
 
+  it('同一个根只取最新的那条状态：后来的成功快照压掉先前的失败', () => {
+    // 事件流「新的在前」：快照在错误之前 = 快照更新。
+    const events = [
+      bundle(),
+      { module: MODULE, name: ERROR_EVENT, core: 'core-a', payload: { team_id: 't1', root: '/srv/docs', error: '目录没标记' } },
+    ];
+    const { bundles, errors } = collectProDocEvents(events);
+    expect(bundles).toHaveLength(1);
+    // 历史错误必须被丢掉：消费方先应用快照再应用错误，留着它会让「刚打开成功
+    // 的目录」显示一条过期的错误条，且**每次有新事件都重新贴一次**。
+    expect(errors).toHaveLength(0);
+  });
+
+  it('同一个根只取最新的那条状态：后来的失败压掉先前的快照', () => {
+    const events = [
+      { module: MODULE, name: ERROR_EVENT, core: 'core-a', payload: { team_id: 't1', root: '/srv/docs', error: '已从配置移除' } },
+      bundle(),
+    ];
+    const { bundles, errors } = collectProDocEvents(events);
+    expect(bundles).toHaveLength(0);
+    expect(errors).toHaveLength(1);
+  });
+
   it('目录层事件带上 path 与 entries', () => {
     const events = [
       {

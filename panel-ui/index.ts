@@ -131,6 +131,17 @@ function recallRoot(teamId: string | null, core: string | null): string | null {
   return map[key] ?? null;
 }
 
+/**
+ * 忘掉上次打开的根（用户按了「换目录」）。
+ *
+ * 必须**同时**清 localStorage：`prodoc.roots` 事件到达时，只要内存里的
+ * `root` 为空就会用这份记忆自动重开目录。只清内存不清记忆，表现是
+ * 「点了换目录、刚回到选择界面就被弹回原来的目录」——用户换不了目录。
+ */
+function forgetRoot(teamId: string | null, core: string | null): void {
+  rememberRoot(teamId, core, null);
+}
+
 /** 门控：模块启用（team 没关它）。 */
 function available(teamId: string | null): boolean {
   const team = teamId === null
@@ -167,13 +178,37 @@ export function activeEntry(teamId: string | null, core: string | null): ProDocE
 /** 打开某个文档根。 */
 export function openRoot(teamId: string | null, core: string | null, root: string): void {
   const key = bundleKeyOf({ team_id: teamId, core, root });
-  prodoc.entries[key] = { ...(prodoc.entries[key] ?? emptyEntry(core ?? '')), loading: true, error: null };
+  const previous = prodoc.entries[key] ?? emptyEntry(core ?? '');
+  prodoc.entries[key] = { ...previous, loading: true, error: null };
   prodoc.root = root;
   rememberRoot(teamId, core, root);
   // 换根之后旧的"检查中"状态不属于新根——不复位的话「检查」按钮会一直显示
   // 忙碌，而那个报告的请求其实早就不作数了。
   prodoc.checking = false;
-  sendCommand({ RequestProDocBundle: { team_id: teamId, root } }, core ?? undefined);
+  const sent = sendCommand({ RequestProDocBundle: { team_id: teamId, root } }, core ?? undefined);
+  // 发不出去（未连接 / 多上游下解析不出目标）时必须回滚 `loading`：否则
+  // 画布永远停在「正在扫描文档目录…」，看起来像"换目录没反应"。
+  if (!sent) {
+    prodoc.entries[key] = {
+      ...prodoc.entries[key],
+      loading: false,
+      error: '命令未发送：未连接到 Core，或无法确定运行区域',
+    };
+  }
+}
+
+/**
+ * 关掉当前根、回到目录选择（「换目录」按钮）。
+ *
+ * 与直接写 `prodoc.root = null` 的区别只有一条，但很关键：这里会清掉
+ * localStorage 的「上次打开的根」。`prodoc.roots` 事件到达时若内存里的根为空，
+ * 扩展会用那份记忆自动重开——不清的话，用户点完「换目录」会被立刻弹回原目录。
+ */
+export function closeRoot(teamId: string | null, core: string | null): void {
+  prodoc.root = null;
+  prodoc.checking = false;
+  forgetRoot(teamId, core);
+  browse(core, null);
 }
 
 /** 重新拉一次当前根（磁盘改过之后手动刷新用）。 */
@@ -193,7 +228,9 @@ export function requestRoots(core: string | null): void {
 export function check(teamId: string | null, core: string | null): void {
   if (!prodoc.root) return;
   prodoc.checking = true;
-  sendCommand({ ProDocCheck: { team_id: teamId ?? undefined, root: prodoc.root } }, core ?? undefined);
+  const sent = sendCommand({ ProDocCheck: { team_id: teamId ?? undefined, root: prodoc.root } }, core ?? undefined);
+  // 同 `openRoot`：命令没发出去就复位，否则「检查」按钮永远显示忙碌。
+  if (!sent) prodoc.checking = false;
 }
 
 /** 当前打开的根的显示信息（顶栏用；找不到时回落成路径本身）。 */
@@ -216,41 +253,24 @@ export function browse(core: string | null, path: string | null): void {
 }
 
 function setup(context: PanelAppContext): void {
-  // 模块事件是**追加**到 `state.moduleEvents` 头部的：watch 长度变化即可。
-  // 每次都从头扫一遍（上限 200 条，代价可忽略），并按键去重取最新一份。
+  // 消费模块事件。
+  //
+  // **不能看 `length`**：`state.moduleEvents` 是 200 条的**滚动**缓冲
+  // （`MODULE_EVENT_CAP`），填满之后长度恒为 200，`watch(length)` 再也不触发
+  // ——新快照永远不应用，画布卡在「正在扫描文档目录…」，表现就是"换目录换不
+  // 过去、刷新也没反应"。而这条缓冲是**所有模块共用**的，subagent / shell
+  // 持续发事件，200 条很快满。
+  //
+  // 新事件总是 unshift 到头部，所以看**头元素的引用**：每个事件都是新对象，
+  // 引用必然变化；缓冲满与不满都成立。每次仍从头扫全表（≤200 条，代价可忽略），
+  // 按键去重取最新一份。
+  //
+  // 补一次首跑（扩展可能在事件已到达之后才注册）：只填充列表与快照，
+  // **不**据此自动恢复上次的根——那是历史事件，里面的根现在可能已不可打开。
+  consumeEvents(context, false);
   watch(
-    () => state.moduleEvents.length,
-    () => {
-      const { bundles, errors, roots, dirs, acks, reports } = collectProDocEvents(state.moduleEvents);
-      for (const report of reports) {
-        prodoc.reports[bundleKeyOf(report)] = report;
-        prodoc.checking = false;
-      }
-      // 写回执按 request_id 派发（见 `write.ts`）：保存/删除的 Promise 在等它。
-      dispatchWriteAcks(acks);
-      for (const bundle of bundles) applyBundle(bundle);
-      for (const error of errors) applyError(error);
-      if (roots) {
-        prodoc.roots = roots.roots;
-        // 恢复上次打开的根——但**只在它仍允许访问时**：配置可能已经删掉了
-        // 那个目录，硬恢复会让画布直接报"必须在允许范围内"。
-        const remembered = recallRoot(context.teamId.value ?? null, context.core.value ?? null);
-        if (!prodoc.root && remembered && roots.roots.some((item) => item.path === remembered)) {
-          openRoot(context.teamId.value ?? null, context.core.value ?? null, remembered);
-        } else if (prodoc.root && !roots.roots.some((item) => item.path === prodoc.root)) {
-          // 当前打开的根已从配置里移除：退出来并说明，而不是继续用旧快照。
-          prodoc.root = null;
-        }
-        if (roots.caps) {
-          prodoc.caps = {
-            max_files: roots.caps.max_files ?? 0,
-            max_file_bytes: roots.caps.max_file_bytes ?? 0,
-            max_total_bytes: roots.caps.max_total_bytes ?? 0,
-          };
-        }
-      }
-      if (dirs) applyDirs(dirs);
-    },
+    () => state.moduleEvents[0],
+    () => consumeEvents(context, true),
   );
 
   // 连上之后拉一次根列表：扩展加载早于连接完成是常态，切 Core 要重拉。
@@ -264,6 +284,47 @@ function setup(context: PanelAppContext): void {
     },
     { immediate: true },
   );
+}
+
+/**
+ * 把当前事件流应用到状态（幂等：重复消费只是重写同样的内容）。
+ *
+ * `restoreRoot` 控制「按记忆自动打开上次的根」这一条：只有**新到达**的
+ * `prodoc.roots` 才允许触发它。
+ */
+function consumeEvents(context: PanelAppContext, restoreRoot: boolean): void {
+  const { bundles, errors, roots, dirs, acks, reports } = collectProDocEvents(state.moduleEvents);
+  for (const report of reports) {
+    prodoc.reports[bundleKeyOf(report)] = report;
+    prodoc.checking = false;
+  }
+  // 写回执按 request_id 派发（见 `write.ts`）：保存/删除的 Promise 在等它。
+  dispatchWriteAcks(acks);
+  for (const bundle of bundles) applyBundle(bundle);
+  for (const error of errors) applyError(error);
+  if (roots) {
+    prodoc.roots = roots.roots;
+    // 恢复上次打开的根——但**只在它仍允许访问时**：配置可能已经删掉了
+    // 那个目录，硬恢复会让画布直接报"必须在允许范围内"。
+    //
+    // 用户按过「换目录」时记忆已被清掉（`forgetRoot`），这里自然不再恢复——
+    // 否则一次 roots 事件就能把刚退出的用户弹回原目录。
+    const remembered = recallRoot(context.teamId.value ?? null, context.core.value ?? null);
+    if (restoreRoot && !prodoc.root && remembered && roots.roots.some((item) => item.path === remembered)) {
+      openRoot(context.teamId.value ?? null, context.core.value ?? null, remembered);
+    } else if (prodoc.root && !roots.roots.some((item) => item.path === prodoc.root)) {
+      // 当前打开的根已从配置里移除：退出来并说明，而不是继续用旧快照。
+      prodoc.root = null;
+    }
+    if (roots.caps) {
+      prodoc.caps = {
+        max_files: roots.caps.max_files ?? 0,
+        max_file_bytes: roots.caps.max_file_bytes ?? 0,
+        max_total_bytes: roots.caps.max_total_bytes ?? 0,
+      };
+    }
+  }
+  if (dirs) applyDirs(dirs);
 }
 
 function applyBundle(bundle: ProDocBundleEvent): void {
